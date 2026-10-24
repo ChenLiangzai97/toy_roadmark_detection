@@ -121,7 +121,7 @@ def find_chrome() -> str | None:
 
 def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
                   n_workers: int, render_url: str | None,
-                  id_prefix: str = "") -> dict:
+                  id_prefix: str = "", start_index: int = 1) -> dict:
     """Spawn node workers; returns summary stats.
 
     id_prefix makes sample ids globally unique across splits when scenes
@@ -130,7 +130,7 @@ def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
     split_dir = out_root / "samples"
     split_dir.mkdir(parents=True, exist_ok=True)
     jobs = []
-    for i, scene in enumerate(scenes, start=1):
+    for i, scene in enumerate(scenes, start=start_index):
         sample_id = f"{id_prefix}{i:06d}"
         out_dir = split_dir / sample_id
         item = {
@@ -188,11 +188,12 @@ def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
 
 def postprocess_labels(scenes: list[dict], out_root: pathlib.Path,
                        camera_id: str = "front",
-                       id_prefix: str = "") -> int:
+                       id_prefix: str = "",
+                       start_index: int = 1) -> int:
     """Read masks, compute labels, write labels.json + verify ID legality."""
     samples_dir = out_root / "samples"
     n = 0
-    for i, scene in enumerate(scenes, start=1):
+    for i, scene in enumerate(scenes, start=start_index):
         sample_id = f"{id_prefix}{i:06d}"
         sdir = samples_dir / sample_id
         visible_ids = decode_instance_ids(sdir / "masks" / f"{camera_id}_visible.png")

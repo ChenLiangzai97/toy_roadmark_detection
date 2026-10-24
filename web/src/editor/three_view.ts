@@ -17,6 +17,7 @@ export type SelectionKind =
 export interface ViewportCallbacks {
   onSelect: (sel: SelectionKind) => void;
   onTransform: () => void; // gizmo moved the selection; caller reads object
+  onDragStart?: () => void; // gizmo drag begins: caller pushes undo snapshot
   onGroundClick?: (x: number, y: number) => void;
 }
 
@@ -79,7 +80,12 @@ export class ThreeViewport {
     const gizmoHelper = this.gizmo.getHelper?.() ?? (this.gizmo as unknown as THREE.Object3D);
     this.scene.add(gizmoHelper);
     this.gizmo.addEventListener("dragging-changed", (e) => {
-      this.controls.enabled = !(e as unknown as { value: boolean }).value;
+      const on = (e as unknown as { value: boolean }).value;
+      this.controls.enabled = !on;
+      if (on) {
+        this.dragCount += 1;
+        this.cb.onDragStart?.();
+      }
     });
     this.gizmo.addEventListener("objectChange", () => this.cb.onTransform());
 
@@ -90,6 +96,12 @@ export class ThreeViewport {
 
     window.addEventListener("resize", () => this.resize());
     this.animate();
+  }
+
+  private dragCount = 0;
+
+  wasDragged(): boolean {
+    return this.dragCount > 0;
   }
 
   setPlaceMode(on: boolean) {

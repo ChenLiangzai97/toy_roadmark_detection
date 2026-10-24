@@ -10,6 +10,7 @@ import { CLASS_NAMES } from "../shared/types";
 import { TEMPLATE_IDS } from "../shared/templates";
 import { intrinsicsFromFovV, KFromIntrinsics, defaultCameraTCE } from "../shared/geometry";
 import { ThreeViewport, type SelectionKind } from "./three_view";
+import { validateSceneV1 } from "../shared/validate";
 
 /* ------------------------------ scene helpers ----------------------------- */
 
@@ -139,19 +140,42 @@ function App() {
     if (!viewDiv.current || vpRef.current) return;
     const vp = new ThreeViewport(viewDiv.current, {
       onSelect: (s) => { setSel(s); },
+      onDragStart: () => {
+        // one snapshot per drag gesture -> single-step undo (review fix #4)
+        setScene((cur) => {
+          undoStack.current.push(JSON.stringify(cur));
+          if (undoStack.current.length > 100) undoStack.current.shift();
+          redoStack.current = [];
+          return cur;
+        });
+      },
       onTransform: () => {
-        // read proxy transform into scene
+        // read proxy transform into scene (no undo push here; the drag-start
+        // hook pushed one snapshot for the whole gesture)
         const t = vpRef.current?.getProxyTransform();
         if (!t || !selRef.current) return;
         const s = selRef.current;
+        const dragged = !!vpRef.current?.wasDragged();
+        if (!dragged) return;
         setScene((prev) => {
           const next = JSON.parse(JSON.stringify(prev)) as SceneV1;
           if (s.kind === "object") {
             const o = next.objects.find((o) => o.object_id === (s as { id: string }).id);
-            if (o) { o.center_ego = [t.pos[0], t.pos[1], t.pos[2]]; o.yaw_rad = t.rotZ; }
+            if (o) {
+              o.center_ego = [t.pos[0], t.pos[1], t.pos[2]];
+              o.yaw_rad = t.rotZ;
+              if (t.scale !== 1 && o.size_abc) {
+                // gizmo uniform scale multiplies per-axis size
+                o.size_abc = o.size_abc.map((v) => Math.max(0.05, v * t.scale)) as [number, number, number];
+              }
+            }
           } else if (s.kind === "arrow") {
             const a = next.arrows.find((a) => a.instance_id === (s as { instanceId: number }).instanceId);
-            if (a) { a.center_ego = [t.pos[0], t.pos[1], 0]; a.yaw_rad = t.rotZ; }
+            if (a) {
+              a.center_ego = [t.pos[0], t.pos[1], 0];
+              a.yaw_rad = t.rotZ;
+              if (t.scale !== 1) a.scale = Math.max(0.1, a.scale * t.scale);
+            }
           } else if (s.kind === "lane_line_point") {
             const line = next.lane_lines.find((l) => l.line_id === (s as { lineId: string }).lineId);
             if (line) {
@@ -286,8 +310,9 @@ function App() {
       if (!f) return;
       try {
         const parsed = JSON.parse(await f.text());
-        if (parsed.schema_version !== 1) {
-          setStatus(`unknown schema_version ${parsed.schema_version}; refusing`);
+        const err = validateSceneV1(parsed);
+        if (err) {
+          setStatus(`invalid scene: ${err}; refusing`);
           return;
         }
         commit(parsed);

@@ -261,8 +261,10 @@ def _projected_size_ok(class_id, cx, cy, yaw, scale, K, T_C_E, W, H):
     return (area >= 64.0 and min(w, h) >= 4.0), area, min(w, h)
 
 
-def _pick_class_balanced(rng: random.Random, used: list[int]) -> int:
-    counts = [used.count(c) for c in range(6)]
+def _pick_class_balanced(rng: random.Random, used: list[int],
+                         split_counts: list[int] | None = None) -> int:
+    counts = [used.count(c) + (split_counts[c] if split_counts else 0)
+              for c in range(6)]
     m = min(counts)
     candidates = [c for c in range(6) if counts[c] == m]
     return rng.choice(candidates)
@@ -272,8 +274,13 @@ def make_scene(split: str, layout: _Layout, variant_idx: int, master_seed: int,
                cfg: GenConfig, *, n_arrows: int | None = None,
                occlusion_mode: str | None = None, pose_perturb: bool = False,
                class_swap_of: list[dict] | None = None,
-               stress: bool = False) -> dict:
-    """Build one SceneV1 from a layout with per-variant randomization."""
+               stress: bool = False,
+               class_counter: list[int] | None = None) -> dict:
+    """Build one SceneV1 from a layout with per-variant randomization.
+
+    class_counter (len 6) balances instance classes ACROSS the whole split,
+    not per scene; required by design doc 7.4 (instance-level balance).
+    """
     rng = _rng(master_seed, split, layout.layout_id, f"v{variant_idx}")
     scene_id = f"{split}_{layout.layout_id}_v{variant_idx:02d}"
     cam = default_camera(cfg, rng, pose_perturb=pose_perturb)
@@ -329,9 +336,12 @@ def make_scene(split: str, layout: _Layout, variant_idx: int, master_seed: int,
         rng.shuffle(slots)
         free_slots = list(layout.free_slots) * 3
         rng.shuffle(free_slots)
+        split_counts = class_counter if class_counter is not None else \
+            [0, 0, 0, 0, 0, 0]
         for k in range(n):
-            class_id = _pick_class_balanced(rng, used_classes)
+            class_id = _pick_class_balanced(rng, used_classes, split_counts)
             used_classes.append(class_id)
+            split_counts[class_id] += 1
             placed = None
             free = rng.random() < cfg.free_arrow_fraction
             pool = free_slots if free and free_slots else slots
@@ -515,6 +525,7 @@ def generate_split(split: str, count: int, master_seed: int, cfg: GenConfig,
     n_layouts = max(1, count // variants_per_layout)
     layout_rng = _rng(master_seed, split, "layouts")
     occlusion_cycle = occlusion_modes or [None]
+    split_class_counts = [0, 0, 0, 0, 0, 0]
     made = 0
     li = 0
     while made < count:
@@ -526,7 +537,8 @@ def generate_split(split: str, count: int, master_seed: int, cfg: GenConfig,
             scene = make_scene(
                 split, layout, v, master_seed, cfg,
                 n_arrows=(1 if simple else None),
-                occlusion_mode=mode, pose_perturb=pose_perturb, stress=stress)
+                occlusion_mode=mode, pose_perturb=pose_perturb, stress=stress,
+                class_counter=split_class_counts)
             scenes.append(scene)
             made += 1
         li += 1
@@ -541,8 +553,9 @@ def generate_split(split: str, count: int, master_seed: int, cfg: GenConfig,
                         "cx": a["center_ego"][0], "cy": a["center_ego"][1],
                         "yaw": a["yaw_rad"], "scale": a["scale"]}
                        for a in src["arrows"]]
-            scene = make_scene(split, _Layout(layout_id, 0.0), 0, master_seed, cfg,
-                               class_swap_of=entries)
+            scene = make_scene(split, _Layout(layout_id, 0.0), 0, master_seed,
+                               cfg, class_swap_of=entries,
+                               class_counter=split_class_counts)
             scene["scene_group_id"] = layout_id
             scene["scene_id"] = f"{split}_{layout_id}_v00"
             scenes.append(scene)

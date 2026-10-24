@@ -45,6 +45,17 @@ DEFAULT_CFG_PATH = REPO / "configs" / "data_v1.yaml"
 
 app = FastAPI(title="arrow-toy editor server")
 
+SCENE_SCHEMA = json.loads(
+    (REPO / "schemas" / "scene_v1.schema.json").read_text())
+
+
+def _validate_scene(scene: dict) -> None:
+    import jsonschema
+    try:
+        jsonschema.validate(scene, SCENE_SCHEMA)
+    except jsonschema.ValidationError as e:
+        raise HTTPException(400, f"invalid scene: {e.message}")
+
 
 class RenderSampleRequest(BaseModel):
     scene: dict
@@ -103,6 +114,7 @@ def health():
 @app.post("/api/render-sample-preview")
 def render_sample_preview(req: PreviewRequest):
     """Render rgb + bev passes for the editor preview panels."""
+    _validate_scene(req.scene)
     scene = req.scene
     cam_id = req.camera_id
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="arrow_prev_"))
@@ -120,11 +132,13 @@ def render_sample_preview(req: PreviewRequest):
         bev = np.asarray(Image.open(tmp / "preview" / "masks" / "bev_instance.png")
                          .convert("RGB"), dtype=np.uint8)
 
-        def b64(arr):
-            return base64.b64encode(arr.tobytes()).decode()
+        def b64_rgba(arr):
+            h, w = arr.shape[:2]
+            rgba = np.dstack([arr, np.full((h, w, 1), 255, dtype=np.uint8)])
+            return base64.b64encode(rgba.tobytes()).decode()
 
-        return {"rgb": {"w": rgb.shape[1], "h": rgb.shape[0], "b64": b64(rgb)},
-                "bev": {"w": bev.shape[1], "h": bev.shape[0], "b64": b64(bev)}}
+        return {"rgb": {"w": rgb.shape[1], "h": rgb.shape[0], "b64": b64_rgba(rgb)},
+                "bev": {"w": bev.shape[1], "h": bev.shape[0], "b64": b64_rgba(bev)}}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -132,6 +146,7 @@ def render_sample_preview(req: PreviewRequest):
 @app.post("/api/render-sample")
 def render_sample(req: RenderSampleRequest):
     """Export the current scene as one labeled sample zip."""
+    _validate_scene(req.scene)
     scene = req.scene
     cam_id = req.camera_id
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="arrow_export_"))
@@ -196,7 +211,9 @@ def _job_thread(job_id: str, req: RenderJobRequest):
     try:
         with _JOB_LOCK:
             JOBS[job_id]["status"] = "running"
-        if req.mode == "variants" and req.scene:
+        if req.mode == "variants" and req.scene is not None:
+            _validate_scene(req.scene)
+        if req.mode == "variants" and req.scene is not None:
             scenes = _make_variants(req.scene, req.count, req.seed)
         else:
             cfg = load_yaml(DEFAULT_CFG_PATH)
@@ -206,14 +223,16 @@ def _job_thread(job_id: str, req: RenderJobRequest):
             scenes = all_scenes["train"]
         prefix = f"job{int(time.time())}_"
         # render in small chunks so cancel requests take effect quickly;
-        # completed samples are kept but the job is not marked complete
+        # sample numbering is GLOBAL across chunks (start_index offsets the
+        # per-chunk enumerate) so later chunks never overwrite earlier ones.
+        CHUNK = 4
         rendered: list[dict] = []
-        for i in range(0, len(scenes), 4):
+        for i in range(0, len(scenes), CHUNK):
             if cancelled():
                 break
-            chunk = scenes[i:i + 4]
+            chunk = scenes[i:i + CHUNK]
             res = render_scenes(chunk, out_root, "job", 2, None,
-                                id_prefix=prefix)
+                                id_prefix=prefix, start_index=i + 1)
             if res["samples"] != len(chunk):
                 raise RuntimeError(
                     f"rendered {res['samples']}/{len(chunk)} in chunk")
@@ -225,7 +244,8 @@ def _job_thread(job_id: str, req: RenderJobRequest):
                 JOBS[job_id].update(status="cancelled",
                                     output_dir=str(out_root))
             return
-        postprocess_labels(rendered, out_root, id_prefix=prefix)
+        postprocess_labels(rendered, out_root, id_prefix=prefix,
+                           start_index=1)
         with _JOB_LOCK:
             JOBS[job_id].update(status="completed", done=len(rendered),
                                 total=len(scenes), output_dir=str(out_root))
