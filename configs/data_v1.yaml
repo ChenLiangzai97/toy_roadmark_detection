@@ -14,12 +14,13 @@ scene:
     near: 0.1
     far: 100.0
 splits:
-  overfit: 24        # independent simple scenes
+  overfit: 48        # independent simple scenes (8 per class)
   train: 6000
   val: 600
   test_clean: 600
   test_occlusion: 200
   test_pose: 200
+  stress: 8
 arrows:
   per_frame_dist:              # clean sets
     empty: 0.15
