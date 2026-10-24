@@ -29,7 +29,7 @@ torch.backends.cudnn.allow_tf32 = True
 
 from torch.utils.data import DataLoader
 
-from arrow_toy.data.dataset import ArrowCacheDataset, make_collate
+from arrow_toy.data.dataset import ArrowCacheDataset, check_dataset_gate, make_collate
 from arrow_toy.losses.criterion import arrow_criterion, hungarian_match
 from arrow_toy.models.model import ArrowToyModel, count_parameters
 from arrow_toy.utils.config import deep_merge, load_yaml, write_json
@@ -60,11 +60,27 @@ def evaluate(model, loader, device, cfg, max_samples: int | None = None):
     model.eval()
     losses = {"loss_cls": 0.0, "loss_center": 0.0, "loss_ori": 0.0}
     n = 0
-    all_scores = {"tp": [], "fp": [], "fn": 0, "center_err": [],
-                  "ang_err": [], "dup": 0, "empty_fp": 0, "empty_n": 0,
-                  "preds": []}
+    from arrow_toy.evaluation.metrics import match_and_score as _mas
+    from arrow_toy.geometry.templates import (
+        template_for_class as _tf, world_polygons as _wp)
+    all_scores = {"preds": []}
     thresholds = cfg["eval"]["center_thresholds_m"]
     bev = cfg["model"]["bev_range_xy"]
+
+    def outlines_fn(b, thr, ds=None):
+        # ignored-arrow outlines for val samples (11.2, same rule as CLI)
+        polys = []
+        for j in range(ds.ignored_cls.shape[1]):
+            if ds.ignored_cls[b, j] == 0 and j > 0 and \
+                    float(ds.ignored_center[b, j][0]) == 0.0 and \
+                    float(ds.ignored_center[b, j][1]) == 0.0:
+                continue
+            t = _tf(int(ds.ignored_cls[b, j]))
+            polys.extend(_wp(t, ds.ignored_center[b, j].tolist(),
+                             float(ds.ignored_yaw[b, j]),
+                             float(ds.ignored_scale[b, j])))
+        return polys
+
     with torch.no_grad():
         for batch in loader:
             batch = {k: (v.to(device) if torch.is_tensor(v) else v)
@@ -88,7 +104,12 @@ def evaluate(model, loader, device, cfg, max_samples: int | None = None):
             for k in losses:
                 losses[k] += float(loss_dict[k])
             n += 1
-            match_and_score(pred, targets, thresholds, bev, all_scores)
+            sids = batch["sample_ids"]
+            idxs = [loader.dataset.sample_ids.index(sid) for sid in sids]
+            _mas(pred, targets, thresholds, bev, all_scores,
+                 sample_ids=sids,
+                 ignore_outlines_fn=lambda b, thr, ix=idxs: outlines_fn(
+                     ix[b], thr, loader.dataset))
             if max_samples and n * loader.batch_size >= max_samples:
                 break
     for k in losses:
@@ -125,8 +146,21 @@ def main(argv=None) -> int:
         print("[train] cuda unavailable; falling back to cpu (recorded)")
         device = "cpu"
 
-    # data
+    # data gate: refuse unaudited data or stale caches (version hash)
     root = pathlib.Path(cfg["dataset"]["root"])
+    gate = check_dataset_gate(root)
+    for sp in (cfg["dataset"]["train_split"], cfg["dataset"]["val_split"]):
+        stats_p = root / "cache" / f"stats_{sp}.json"
+        if not stats_p.exists():
+            raise RuntimeError(f"cache for split '{sp}' missing; run "
+                               "prepare_cache first")
+        stats = json.loads(stats_p.read_text())
+        cached_v = stats.get("data_version")
+        if cached_v is not None and cached_v != gate["data_version"]:
+            raise RuntimeError(
+                f"cache for '{sp}' was built against data_version "
+                f"{cached_v} but the dataset is now {gate['data_version']}; "
+                "rerun prepare_cache")
     train_ds = ArrowCacheDataset(root, cfg["dataset"]["train_split"])
     val_ds = ArrowCacheDataset(root, cfg["dataset"]["val_split"])
     train_loader = DataLoader(
@@ -153,6 +187,8 @@ def main(argv=None) -> int:
         "device": torch.cuda.get_device_name(0) if device == "cuda" else "cpu",
         "params": n_params,
         "git_commit": _git_commit(),
+        "data_version": gate["data_version"],
+        "dataset_splits": gate["splits"],
     }
     write_json(run_dir / "environment.json", env)
 

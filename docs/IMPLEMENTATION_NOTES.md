@@ -173,3 +173,39 @@ implementation decisions, interface deviations and their reasons, per phase.
   queued; means+variance in the final comparison table.
 - Ablation E (dense heatmap head on the same BEV features) implemented
   (arrow_toy/models/dense_head.py) as the designed bottleneck check.
+
+
+## Evaluation hardening round (review findings, all fixed + regression-tested)
+
+1. FN semantics: a GT matched only by a below-cutoff query is FN. ONE
+   shared counting function `_counts_at_conf` is used by BOTH the
+   confidence search and the final summary (the search previously kept
+   the old bug after the summary was fixed).
+2. `evaluate` CLI now takes `frozen_conf` into summarize (val-frozen
+   threshold actually applied; previously select_conf=False silently
+   computed at 0.5).
+3. Per-class AP + mAP (101-point interpolation) and macro-F1 (classes
+   with GT) added; zero-GT classes reported.
+4. Design-11.2 suppression reworked: applied AFTER valid-GT matching,
+   per distance threshold, using the actual TEMPLATE OUTLINE distance
+   (not an inflated bbox); suppressed queries are removed from ALL
+   counting via an explicit `sup` flag (no logits tricks).
+5. Offline recompute no longer fabricates logits: the evaluator accepts
+   saved foreground probabilities directly (`probs_fg`/`best_cls`).
+   Official numbers below come from checkpoint re-inference.
+6. Audit hardening: manifest counts vs split indexes, index uniqueness,
+   per-sample file existence, labels schema validation, labels-vs-scene
+   arrow counts, and mask recount (visible_px/amodal_px) on sampled
+   splits; overall_pass now requires zero integrity problems.
+7. Dataset gate: training/eval refuse manifest.completed=false,
+   audit overall_pass=false, or cache built against a different
+   data_version (sha256 of manifest+audit recorded in cache stats and
+   run environment.json).
+8. predictions_* now carry sample ids and full-precision probabilities.
+
+## P4 re-validation (fixed evaluator, version-bound)
+
+- runs/overfit32_v2: 32 simple scenes (subset of the current dataset),
+  1000 steps, 54.35 s; data_version a065b96fe99c9dbd; commit fe64ded.
+  f1@0.5 0.984, mAP@0.5 1.000, macro_f1 0.985, center err 0.021 m,
+  angle err 0.52 deg -> P4 diagnostic gate PASSED.

@@ -5,13 +5,15 @@ Produces under <root>/cache/:
   calib_<split>.npz     K [N,3,3], T_C_E [N,4,4] float32
   targets_<split>.npz   class_ids, centers_norm [N,32,2] padded, yaws,
                         masks [N,32] (1 valid, 0 pad), allow_no_object,
-                        group_ids for debugging (not a model input)
+                        sample_ids, plus ignored-arrow geometry
+                        (cls/center_m/yaw/scale [N,8]) for 11.2 eval
 Only RGB + calibration + small tensors are cached; masks/scenes are NOT
-parsed per training step. The projection grid cache is a single tensor
-per unique calibration (front camera is fixed across the dataset).
+parsed per training step. The cache records the data_version hash of
+manifest+audit; training refuses mismatched versions.
 """
 from __future__ import annotations
 
+import hashlib
 import argparse
 import json
 import pathlib
@@ -23,6 +25,9 @@ from PIL import Image
 NUM_QUERIES = 32
 
 
+MAX_IGNORED = 8
+
+
 def build_cache(root: pathlib.Path, split: str, camera_id: str = "front",
                 max_queries: int = NUM_QUERIES) -> dict:
     root = pathlib.Path(root)
@@ -32,6 +37,7 @@ def build_cache(root: pathlib.Path, split: str, camera_id: str = "front",
     images = []
     Ks, Ts = [], []
     cls, ctr, yaw, mask, ano = [], [], [], [], []
+    ign = []
     n_over_capacity = 0
     for sid in ids:
         sdir = root / "samples" / sid
@@ -66,8 +72,29 @@ def build_cache(root: pathlib.Path, split: str, camera_id: str = "front",
         yaw.append(yw)
         mask.append(m)
         ano.append(labels["allow_no_object"])
+        ig = {k: [] for k in ("cls", "center", "yaw", "scale")}
+        for a in labels["arrows"]:
+            if a["arrow_valid"] or len(ig["cls"]) >= MAX_IGNORED:
+                continue
+            ig["cls"].append(a["class_id"])
+            ig["center"].append(a["center_ego"][:2])
+            ig["yaw"].append(a["yaw_rad"])
+            ig["scale"].append(a["scale"])
+        ign.append(ig)
     images = np.stack(images) if images else np.zeros((0,), dtype=np.uint8)
     np.save(out_dir / f"images_{split}.npy", images)
+    # ignored-arrow geometry, zero-padded
+    n = len(ids)
+    ign_cls = np.zeros((n, MAX_IGNORED), dtype=np.int64)
+    ign_ctr = np.zeros((n, MAX_IGNORED, 2), dtype=np.float32)
+    ign_yaw = np.zeros((n, MAX_IGNORED), dtype=np.float32)
+    ign_scale = np.ones((n, MAX_IGNORED), dtype=np.float32)
+    for i, ig in enumerate(ign):
+        for j in range(len(ig["cls"])):
+            ign_cls[i, j] = ig["cls"][j]
+            ign_ctr[i, j] = ig["center"][j]
+            ign_yaw[i, j] = ig["yaw"][j]
+            ign_scale[i, j] = ig["scale"][j]
     np.savez(out_dir / f"calib_{split}.npz",
              K=np.stack(Ks) if Ks else np.zeros((0, 3, 3), np.float32),
              T_C_E=np.stack(Ts) if Ts else np.zeros((0, 4, 4), np.float32))
@@ -75,11 +102,17 @@ def build_cache(root: pathlib.Path, split: str, camera_id: str = "front",
              class_ids=np.stack(cls), centers_norm=np.stack(ctr),
              yaws=np.stack(yaw), masks=np.stack(mask),
              allow_no_object=np.asarray(ano, dtype=bool),
-             sample_ids=np.asarray(ids))
+             sample_ids=np.asarray(ids),
+             ignored_cls=ign_cls, ignored_center=ign_ctr,
+             ignored_yaw=ign_yaw, ignored_scale=ign_scale)
+    h = hashlib.sha256()
+    h.update((root / "manifest.json").read_bytes())
+    h.update((root / "audit.json").read_bytes())
     stats = {
         "split": split, "n": len(ids), "shape": list(images.shape),
         "n_valid_arrows": int(sum(int(m.sum()) for m in mask)),
         "allow_no_object_true": int(sum(1 for a in ano if a)),
+        "data_version": h.hexdigest()[:16],
     }
     (out_dir / f"stats_{split}.json").write_text(json.dumps(stats, indent=1))
     return stats

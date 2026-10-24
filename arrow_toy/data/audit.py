@@ -23,6 +23,8 @@ import numpy as np
 from arrow_toy.geometry.bev import BevGrid
 from arrow_toy.utils.config import load_yaml
 
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
 MIN_CLASS_INSTANCES = 8
 BEV_FEATURE = BevGrid.feature()
 
@@ -107,6 +109,79 @@ def check_no_split_leakage(splits: dict[str, dict]) -> list[str]:
     return leaks
 
 
+def check_integrity(root: pathlib.Path, manifest: dict,
+                    splits: list[str], verify_masks: int = 5,
+                    schema_check: int = 10) -> list[str]:
+    """Hard checks review round: counts vs manifest, index uniqueness,
+    sample-dir completeness, labels schema, and mask-vs-label recount on
+    a deterministic sample."""
+    import random as _random
+    import jsonschema
+    from PIL import Image
+    from arrow_toy.data.labels import decode_instance_ids
+    schema = json.loads((REPO / "schemas" / "sample_labels_v1.schema.json")
+                        .read_text())
+    problems = []
+    rng = _random.Random(1234)
+    for split in splits:
+        ids = (root / "splits" / f"{split}.txt").read_text().split()
+        if len(ids) != len(set(ids)):
+            problems.append(f"{split}: duplicate sample ids in index")
+        expected = manifest["splits"].get(split)
+        if expected is not None and expected != len(ids):
+            problems.append(f"{split}: manifest says {expected} samples "
+                            f"but index has {len(ids)}")
+        for sid in ids:
+            sdir = root / "samples" / sid
+            for rel in ("labels.json", "scene.json", "rgb/front.png",
+                        "masks/front_visible.png",
+                        "masks/bev_instance.png"):
+                if not (sdir / rel).exists():
+                    problems.append(f"{sid}: missing {rel}")
+        # schema check on a sample
+        for sid in ids[:schema_check]:
+            labels = json.loads((root / "samples" / sid / "labels.json")
+                                .read_text())
+            try:
+                jsonschema.validate(labels, schema)
+            except jsonschema.ValidationError as e:
+                problems.append(f"{sid}: labels schema: {e.message}")
+                continue
+            scene = json.loads((root / "samples" / sid / "scene.json")
+                               .read_text())
+            # labels must match the scene arrows 1:1
+            if len(labels["arrows"]) != len(scene["arrows"]):
+                problems.append(f"{sid}: labels/scene arrow count mismatch")
+        # mask recount on a deterministic sample of samples
+        for sid in [ids[i] for i in rng.sample(range(len(ids)),
+                                               min(verify_masks, len(ids)))]:
+            sdir = root / "samples" / sid
+            labels = json.loads((sdir / "labels.json").read_text())
+            scene = json.loads((sdir / "scene.json").read_text())
+            vis = decode_instance_ids(sdir / "masks" / "front_visible.png")
+            assigned = {a["instance_id"] for a in scene["arrows"]} | {0}
+            found = set(int(v) for v in np.unique(vis))
+            if not found <= assigned:
+                problems.append(f"{sid}: illegal mask ids {found - assigned}")
+            for a in labels["arrows"]:
+                v = a["visibility"]["front"]
+                recount = int((vis == a["instance_id"]).sum())
+                if recount != v["visible_px"]:
+                    problems.append(
+                        f"{sid}: visible_px label {v['visible_px']} != "
+                        f"mask recount {recount}")
+                from PIL import Image as _Im
+                am = np.asarray(_Im.open(
+                    sdir / "masks" / "amodal" / "front" /
+                    f"{a['instance_id']}.png").convert("L"),
+                    dtype=np.uint8) > 127
+                if int(am.sum()) != v["amodal_px"]:
+                    problems.append(
+                        f"{sid}: amodal_px label {v['amodal_px']} != "
+                        f"mask recount {int(am.sum())}")
+    return problems
+
+
 def run_audit(root: pathlib.Path, expected_splits: list[str] | None = None,
               min_class: int = MIN_CLASS_INSTANCES) -> dict:
     root = pathlib.Path(root)
@@ -139,7 +214,11 @@ def run_audit(root: pathlib.Path, expected_splits: list[str] | None = None,
     }
     clean_splits = [s for s in splits
                     if s not in ("test_occlusion", "test_pose", "stress")]
+    integrity = check_integrity(root, manifest, splits)
+    audit["integrity_problems"] = integrity[:50]
+    audit["integrity_problem_count"] = len(integrity)
     overall = (not leaks
+               and not integrity
                and all(infos[s]["pass"] for s in splits if s in infos)
                # clean splits additionally need sane distributions
                and all(infos[s]["arrows_total"] > 0 for s in clean_splits))

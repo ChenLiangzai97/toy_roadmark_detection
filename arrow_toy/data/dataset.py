@@ -14,11 +14,42 @@ import torch
 from torch.utils.data import Dataset
 
 
+def check_dataset_gate(root: pathlib.Path) -> dict:
+    """Training/eval must refuse datasets that are incomplete, failed
+    audit, or whose cache was built against a different data version."""
+    import hashlib
+    manifest = json.loads((root / "manifest.json").read_text())
+    if not manifest.get("completed"):
+        raise RuntimeError(
+            f"{root}: manifest.completed=false (audit not passed); "
+            "refusing to train on unaudited data")
+    audit = json.loads((root / "audit.json").read_text())
+    if not audit.get("overall_pass"):
+        raise RuntimeError(f"{root}: audit overall_pass=false; refusing")
+    h = hashlib.sha256()
+    h.update((root / "manifest.json").read_bytes())
+    h.update((root / "audit.json").read_bytes())
+    return {"data_version": h.hexdigest()[:16],
+            "splits": manifest.get("splits", {})}
+
+
 class ArrowCacheDataset(Dataset):
     def __init__(self, root: str | pathlib.Path, split: str,
-                 camera_id: str = "front") -> None:
+                 camera_id: str = "front", enforce_gate: bool = True
+                 ) -> None:
         self.root = pathlib.Path(root)
         self.split = split
+        if enforce_gate:
+            gate = check_dataset_gate(self.root)
+            stats_p = self.root / "cache" / f"stats_{split}.json"
+            if stats_p.exists():
+                import json as _json
+                cached = _json.loads(stats_p.read_text()).get("data_version")
+                if cached is not None and cached != gate["data_version"]:
+                    raise RuntimeError(
+                        f"cache for '{split}' (version {cached}) does not "
+                        f"match dataset version {gate['data_version']}; "
+                        "rerun prepare_cache")
         cache = self.root / "cache"
         self.images = np.load(cache / f"images_{split}.npy", mmap_mode="r")
         calib = np.load(cache / f"calib_{split}.npz")
@@ -32,6 +63,15 @@ class ArrowCacheDataset(Dataset):
         self.allow_no_object = tgt["allow_no_object"].astype(bool)
         self.sample_ids = [str(s) for s in tgt["sample_ids"]]
         self.orientation_valid = self.mask  # valid arrows have valid yaw
+        self.ignored_cls = tgt["ignored_cls"] if "ignored_cls" in tgt \
+            else np.zeros((len(self.sample_ids), 8), np.int64)
+        self.ignored_center = tgt["ignored_center"] \
+            if "ignored_center" in tgt \
+            else np.zeros((len(self.sample_ids), 8, 2), np.float32)
+        self.ignored_yaw = tgt["ignored_yaw"] if "ignored_yaw" in tgt \
+            else np.zeros((len(self.sample_ids), 8), np.float32)
+        self.ignored_scale = tgt["ignored_scale"] if "ignored_scale" in tgt \
+            else np.ones((len(self.sample_ids), 8), np.float32)
 
     def __len__(self) -> int:
         return len(self.sample_ids)

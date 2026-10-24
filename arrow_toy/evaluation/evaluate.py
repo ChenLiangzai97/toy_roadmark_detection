@@ -1,46 +1,65 @@
 """Evaluation CLI: run detection metrics on a chosen split for a run dir.
 
-    python -m arrow_toy.evaluation.evaluate --run-dir runs/baseline_s42 --split test
+    python -m arrow_toy.evaluation.evaluate --run-dir runs/baseline_s42 --split test_clean
+
+Confidence threshold is FROZEN from the run's val selection (never tuned
+here). Ignore-region suppression follows design 11.2: applied AFTER
+valid-GT matching, per distance threshold, using the actual template
+outlines inflated by that threshold.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import sys
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
 from arrow_toy.data.dataset import ArrowCacheDataset, make_collate
 from arrow_toy.evaluation.metrics import match_and_score, summarize
-from arrow_toy.geometry.templates import template_for_class, world_bbox
+from arrow_toy.geometry.templates import template_for_class, world_polygons
 from arrow_toy.models.model import ArrowToyModel
 from arrow_toy.utils.config import load_yaml
 
-
-def ignore_regions(labels: dict, margin_m: float):
-    """BEV boxes of ignored arrows inflated by the distance threshold
-    (design 11.2). Predictions inside are removed from P/R/AP counting."""
-    regions = []
-    bev = labels["bev_range"]
-    for a in labels["arrows"]:
-        if a["arrow_valid"] or a["ignore_reason"] in (None, "outside_bev",
-                                                      "outside_camera"):
-            continue
-        t = template_for_class(a["class_id"])
-        x0, x1, y0, y1 = world_bbox(t, a["center_ego"][:2], a["yaw_rad"],
-                                    a["scale"])
-        regions.append((x0 - margin_m, x1 + margin_m,
-                        y0 - margin_m, y1 + margin_m))
-    return regions
+IGNORE_FOR_REGIONS = {"occluded", "truncated", "too_small",
+                      "no_visual_evidence", "overlapping_arrow"}
 
 
-def in_regions(x: float, y: float, regions) -> bool:
-    return any(x0 <= x <= x1 and y0 <= y <= y1 for x0, x1, y0, y1 in regions)
+def data_version(root: pathlib.Path) -> str:
+    """Hash of manifest + audit binding the dataset version."""
+    h = hashlib.sha256()
+    h.update((root / "manifest.json").read_bytes())
+    h.update((root / "audit.json").read_bytes())
+    return h.hexdigest()[:16]
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+
+def make_ignore_outlines_fn(labels_by_id: dict, sample_ids: list[str]):
+    """Returns fn(b, thr) -> list of world polygon outlines for ignored
+    arrows of sample b (design 11.2)."""
+    cache: dict[tuple[str, float], list] = {}
+
+    def fn(b: int, thr: float) -> list:
+        sid = sample_ids[b]
+        key = (sid, thr)
+        if key in cache:
+            return cache[key]
+        outlines = []
+        labels = labels_by_id.get(sid)
+        if labels:
+            for a in labels["arrows"]:
+                if a["arrow_valid"] or a["ignore_reason"] not in IGNORE_FOR_REGIONS:
+                    continue
+                t = template_for_class(a["class_id"])
+                polys = world_polygons(t, a["center_ego"][:2],
+                                       a["yaw_rad"], a["scale"])
+                outlines.extend(polys)
+        cache[key] = outlines
+        return outlines
+
+    return fn
 
 
 def main(argv=None) -> int:
@@ -62,18 +81,23 @@ def main(argv=None) -> int:
 
     root = pathlib.Path(cfg["dataset"]["root"])
     ds = ArrowCacheDataset(root, args.split)
+    ids = (root / "splits" / f"{args.split}.txt").read_text().split()
+    labels_by_id = {}
+    for sid in ids:
+        labels_by_id[sid] = json.loads(
+            (root / "samples" / sid / "labels.json").read_text())
+    outlines_fn = make_ignore_outlines_fn(labels_by_id, ds.sample_ids)
     loader = DataLoader(ds, batch_size=cfg["train"]["batch_size"],
                         shuffle=False, num_workers=2, collate_fn=make_collate)
     thresholds = cfg["eval"]["center_thresholds_m"]
     bev = cfg["model"]["bev_range_xy"]
-    # confidence threshold FIXED from the run's val selection (no test tuning)
-    chosen = None
+
     res_path = run_dir / "result.json"
+    frozen = None
     if res_path.exists():
-        chosen = json.loads(res_path.read_text()).get("metrics", {}).get(
+        frozen = json.loads(res_path.read_text()).get("metrics", {}).get(
             "chosen_conf_threshold")
     scores = {"preds": []}
-    n_suppressed = 0
     with torch.no_grad():
         for batch in loader:
             batch = {k: (v.to(device) if torch.is_tensor(v) else v)
@@ -84,52 +108,38 @@ def main(argv=None) -> int:
             targets = {k: batch[k] for k in
                        ("cls", "center", "dir", "mask",
                         "orientation_valid", "allow_no_object")}
-            # 11.2: drop predictions inside ignored-arrow regions (per
-            # sample, using the ORIGINAL labels, class not required)
-            thr = thresholds[0]
-            probs = pred["pred_logits"].float().softmax(-1)
-            for b in range(batch["image"].shape[0]):
-                labels = json.loads(
-                    (root / "samples" / batch["sample_ids"][b]
-                     / "labels.json").read_text())
-                regions = ignore_regions(labels, thr)
-                if not regions:
-                    continue
-                x_min, x_max, y_min, y_max = bev
-                cn = pred["pred_center_norm"][b]
-                xs = x_min + cn[:, 0] * (x_max - x_min)
-                ys = y_min + cn[:, 1] * (y_max - y_min)
-                keep = torch.ones(xs.shape[0], dtype=torch.bool,
-                                  device=xs.device)
-                for qi in range(xs.shape[0]):
-                    if in_regions(float(xs[qi]), float(ys[qi]), regions):
-                        keep[qi] = False
-                        n_suppressed += 1
-                pred["pred_logits"][b] = torch.where(
-                    keep.unsqueeze(-1), pred["pred_logits"][b],
-                    torch.full_like(pred["pred_logits"][b], -1e9))
-            match_and_score(pred, targets, thresholds, bev, scores)
-    metrics = summarize(scores, thresholds, select_conf=(chosen is None))
-    if chosen is not None:
-        # recompute at the frozen val-chosen confidence
-        metrics_sel = summarize(scores, thresholds, select_conf=True)
-        metrics["chosen_conf_threshold"] = chosen
-        metrics["note"] = ("confidence threshold frozen from val; "
-                           "metrics@0.5 use it")
-        del metrics_sel
-    # attach sample ids to predictions
+            match_and_score(pred, targets, thresholds, bev, scores,
+                            sample_ids=batch["sample_ids"],
+                            ignore_outlines_fn=outlines_fn)
+    metrics = summarize(scores, thresholds,
+                        frozen_conf=frozen if frozen is not None else None)
     out = {
         "run": str(run_dir),
         "split": args.split,
         "checkpoint": args.checkpoint,
+        "data_version": data_version(root),
+        "git_commit": _git_commit(),
         "metrics": metrics,
-        "ignored_region_suppressed_predictions": n_suppressed,
     }
     out_path = pathlib.Path(
         args.output or run_dir / f"eval_{args.split}.json")
     out_path.write_text(json.dumps(out, indent=1))
+    # full-precision per-query predictions with sample ids
+    with (run_dir / f"predictions_{args.split}.jsonl").open("w") as f:
+        for p in scores["preds"]:
+            f.write(json.dumps(p) + "\n")
     print(json.dumps(metrics, indent=1))
     return 0
+
+
+def _git_commit() -> str:
+    try:
+        import subprocess
+        out = subprocess.run(["git", "rev-parse", "HEAD"],
+                             capture_output=True, text=True)
+        return out.stdout.strip()
+    except Exception:
+        return "unknown"
 
 
 if __name__ == "__main__":

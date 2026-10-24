@@ -202,3 +202,52 @@ def test_eval_fn_counts_low_conf_matches():
     assert m["recall@0.5"] == 0.5, m
     assert m["precision@0.5"] == 1.0, m
     assert abs(m["f1@0.5"] - 2 * 0.5 / 1.5) < 1e-6, m
+
+
+def test_threshold_search_counts_fn_correctly():
+    """Regression (review): the CONFIDENCE SEARCH must use the same FN
+    semantics as the final summary. Case: 2 GT; TP confidences 0.9/0.15
+    plus an FP at 0.18. Correct choice is 0.1 with F1=0.8."""
+    from arrow_toy.evaluation.metrics import match_and_score, summarize
+    pred = {
+        "probs_fg": torch.tensor([[[0.9, 0.0, 0.0, 0.0, 0.0, 0.0],
+                                   [0.15, 0.0, 0.0, 0.0, 0.0, 0.0],
+                                   [0.18, 0.0, 0.0, 0.0, 0.0, 0.0]]]),
+        "best_cls": torch.tensor([[0, 0, 0]]),
+        "pred_center_norm": torch.tensor([[[0.5, 0.5], [0.7, 0.5],
+                                           [0.1, 0.1]]]),
+        "dir_norm": torch.tensor([[[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]]]),
+    }
+    targets = _targets(1, [[(0, 0.5, 0.5, 0.0), (0, 0.7, 0.5, 0.0)]])
+    out = {"preds": []}
+    match_and_score(pred, targets, [0.5], [2.0, 18.0, -4.0, 4.0], out)
+    m = summarize(out, [0.5])
+    assert m["chosen_conf_threshold"] == 0.1, m["chosen_conf_threshold"]
+    # at 0.1: TP=2 (0.9, 0.15), FP=1 (0.18) -> P=2/3, R=1, F1=0.8
+    assert abs(m["f1@0.5"] - 0.8) < 1e-6, m["f1@0.5"]
+    assert abs(m["precision@0.5"] - 2 / 3) < 1e-6
+    assert m["recall@0.5"] == 1.0
+    # frozen threshold overrides selection: at 0.5 only the 0.9 TP counts,
+    # the 0.15 match becomes FN -> P=1, R=0.5, F1=2/3
+    m2 = summarize(out, [0.5], frozen_conf=0.5)
+    assert m2["chosen_conf_threshold"] == 0.5
+    assert abs(m2["f1@0.5"] - 2 / 3) < 1e-6
+    assert m2["precision@0.5"] == 1.0 and abs(m2["recall@0.5"] - 0.5) < 1e-6
+
+
+def test_excluded_queries_removed_from_all_counts():
+    from arrow_toy.evaluation.metrics import match_and_score, summarize
+    pred = {
+        "probs_fg": torch.tensor([[[0.9, 0.0, 0.0, 0.0, 0.0, 0.0],
+                                   [0.8, 0.0, 0.0, 0.0, 0.0, 0.0]]]),
+        "best_cls": torch.tensor([[0, 0]]),
+        "pred_center_norm": torch.tensor([[[0.5, 0.5], [0.51, 0.5]]]),
+        "dir_norm": torch.tensor([[[1.0, 0.0], [1.0, 0.0]]]),
+    }
+    targets = _targets(1, [[(0, 0.5, 0.5, 0.0)]])
+    excl = torch.tensor([[False, True]])  # duplicate suppressed (11.2)
+    out = {"preds": []}
+    match_and_score(pred, targets, [0.5], [2.0, 18.0, -4.0, 4.0], out,
+                    excluded=excl)
+    m = summarize(out, [0.5])
+    assert m["precision@0.5"] == 1.0 and m["recall@0.5"] == 1.0
