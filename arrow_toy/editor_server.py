@@ -48,8 +48,14 @@ app = FastAPI(title="arrow-toy editor server")
 SCENE_SCHEMA = json.loads(
     (REPO / "schemas" / "scene_v1.schema.json").read_text())
 
+# arrow template ids that actually exist (shared with the front-end
+# validator, which derives them from the same assets)
+_TEMPLATE_IDS = {p.stem for p in (REPO / "assets" / "arrows").glob("*.json")}
+
 
 def _validate_scene(scene: dict) -> None:
+    """Schema + semantic validation; called SYNCHRONOUSLY at every scene
+    API entry so invalid scenes fail with 400 before any rendering."""
     import jsonschema
     try:
         jsonschema.validate(scene, SCENE_SCHEMA)
@@ -63,6 +69,9 @@ def _validate_scene(scene: dict) -> None:
             raise HTTPException(400, f"invalid scene: duplicate "
                                      f"instance_id {iid}")
         seen.add(iid)
+        if a["template_id"] not in _TEMPLATE_IDS:
+            raise HTTPException(400, f"invalid scene: unknown template_id "
+                                     f"{a['template_id']}")
     for c in scene.get("cameras", []):
         K = c["K"]
         if not (K[0][0] > 0 and K[1][1] > 0):
@@ -226,8 +235,6 @@ def _job_thread(job_id: str, req: RenderJobRequest):
         with _JOB_LOCK:
             JOBS[job_id]["status"] = "running"
         if req.mode == "variants" and req.scene is not None:
-            _validate_scene(req.scene)
-        if req.mode == "variants" and req.scene is not None:
             scenes = _make_variants(req.scene, req.count, req.seed)
         else:
             cfg = load_yaml(DEFAULT_CFG_PATH)
@@ -270,6 +277,8 @@ def _job_thread(job_id: str, req: RenderJobRequest):
 
 @app.post("/api/render-jobs")
 def create_render_job(req: RenderJobRequest):
+    if req.mode == "variants" and req.scene is not None:
+        _validate_scene(req.scene)  # synchronous 400, before job creation
     job_id = f"job_{int(time.time() * 1000):x}"
     with _JOB_LOCK:
         JOBS[job_id] = {"job_id": job_id, "status": "queued",
