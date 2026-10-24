@@ -6,7 +6,8 @@ import { createRoot } from "react-dom/client";
 import type {
   CameraCalibration, Lane, LaneLine, SceneArrow, SceneObject, SceneV1,
 } from "../shared/types";
-import { CLASS_NAMES, TEMPLATE_IDS } from "../shared/templates";
+import { CLASS_NAMES } from "../shared/types";
+import { TEMPLATE_IDS } from "../shared/templates";
 import { intrinsicsFromFovV, KFromIntrinsics, defaultCameraTCE } from "../shared/geometry";
 import { ThreeViewport, type SelectionKind } from "./three_view";
 
@@ -167,7 +168,8 @@ function App() {
         if (t === "add_box" || t === "add_cylinder" || t === "add_car") {
           commit((prev) => {
             const next = JSON.parse(JSON.stringify(prev)) as SceneV1;
-            const size = t === "add_car" ? [4.0, 1.8, 1.5] : [1.2, 1.2, 1.5];
+                    const size: [number, number, number] =
+            t === "add_car" ? [4.0, 1.8, 1.5] : [1.2, 1.2, 1.5];
             const obj: SceneObject = {
               object_id: uid("obj"), shape: t === "add_box" ? "box" : t === "add_car" ? "car" : "cylinder",
               size_abc: size, center_ego: [x, y, 0], yaw_rad: 0, color: "#7a7f85",
@@ -244,7 +246,7 @@ function App() {
       const r = bin.charCodeAt(i), g = bin.charCodeAt(i + 1), b = bin.charCodeAt(i + 2);
       if (colorize) {
         const idv = r + 256 * g + 65536 * b;
-        if (idv === 0) { id.data[j] = 24; id.data[j + 1] = 26; id.data[j + 2 = 30] = 30; }
+        if (idv === 0) { id.data[j] = 24; id.data[j + 1] = 26; id.data[j + 2] = 30; }
         else {
           const h = (idv * 47) % 360;
           const [r2, g2, b2] = hslToRgb(h / 360, 0.75, 0.55);
@@ -353,7 +355,6 @@ function App() {
       return (
         <div>
           <b>arrow #{a.instance_id}</b>
-          <NumField label="class" value={0} step={0} onChange={() => {}} />
           <div style={{ marginBottom: 6 }}>
             <select value={a.class_id} onChange={(e) => {
               const cls = parseInt(e.target.value);
@@ -364,7 +365,7 @@ function App() {
                 return next;
               });
             }}>
-              {CLASS_NAMES.map((n, i) => <option key={n} value={i}>{i} {n}</option>)}
+              {CLASS_NAMES.map((n: string, i: number) => <option key={n} value={i}>{i} {n}</option>)}
             </select>
           </div>
           <NumField label="x (m)" value={a.center_ego[0]} onChange={(v) => patchArrow(a.instance_id, { center_ego: [v, a.center_ego[1], 0] })} />
@@ -564,7 +565,7 @@ function App() {
         <Row>
           <Btn active={tool === "add_arrow"} onClick={() => setTool("add_arrow")}>+arrow</Btn>
           <select value={arrowClass} onChange={(e) => setArrowClass(parseInt(e.target.value))}>
-            {CLASS_NAMES.map((n, i) => <option key={n} value={i}>{n}</option>)}
+            {CLASS_NAMES.map((n: string, i: number) => <option key={n} value={i}>{n}</option>)}
           </select>
         </Row>
         <Row><Btn active={tool === "draw_line"} onClick={() => { setTool("draw_line"); setLineDraft([]); }}>lane line</Btn></Row>
@@ -723,6 +724,7 @@ function cameraPos(cal: CameraCalibration): [number, number, number] {
 
 function tceFromPitchYaw(pitchDown: number, yaw: number,
                          pos: [number, number, number]): number[][] {
+  // build T_C_E = [Rz(yaw) @ R0 | -R t]
   const s = Math.sin(pitchDown), c = Math.cos(pitchDown);
   const R0 = [[0, -1, 0], [-s, 0, -c], [c, 0, -s]];
   const sy = Math.sin(yaw), cy = Math.cos(yaw);
