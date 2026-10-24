@@ -188,6 +188,11 @@ def _make_variants(scene: dict, count: int, seed: int) -> list[dict]:
 
 def _job_thread(job_id: str, req: RenderJobRequest):
     out_root = REPO / "data" / "editor_jobs" / req.dataset_name
+
+    def cancelled() -> bool:
+        with _JOB_LOCK:
+            return JOBS[job_id].get("status") == "cancelled"
+
     try:
         with _JOB_LOCK:
             JOBS[job_id]["status"] = "running"
@@ -200,13 +205,29 @@ def _job_thread(job_id: str, req: RenderJobRequest):
                 {**cfg, "splits": {"train": req.count}}, ["train"])
             scenes = all_scenes["train"]
         prefix = f"job{int(time.time())}_"
-        res = render_scenes(scenes, out_root, "job", 2, None,
-                            id_prefix=prefix)
-        if res["samples"] != len(scenes):
-            raise RuntimeError(f"rendered {res['samples']}/{len(scenes)}")
-        postprocess_labels(scenes, out_root, id_prefix=prefix)
+        # render in small chunks so cancel requests take effect quickly;
+        # completed samples are kept but the job is not marked complete
+        rendered: list[dict] = []
+        for i in range(0, len(scenes), 4):
+            if cancelled():
+                break
+            chunk = scenes[i:i + 4]
+            res = render_scenes(chunk, out_root, "job", 2, None,
+                                id_prefix=prefix)
+            if res["samples"] != len(chunk):
+                raise RuntimeError(
+                    f"rendered {res['samples']}/{len(chunk)} in chunk")
+            rendered.extend(chunk)
+            with _JOB_LOCK:
+                JOBS[job_id]["done"] = len(rendered)
+        if cancelled():
+            with _JOB_LOCK:
+                JOBS[job_id].update(status="cancelled",
+                                    output_dir=str(out_root))
+            return
+        postprocess_labels(rendered, out_root, id_prefix=prefix)
         with _JOB_LOCK:
-            JOBS[job_id].update(status="completed", done=len(scenes),
+            JOBS[job_id].update(status="completed", done=len(rendered),
                                 total=len(scenes), output_dir=str(out_root))
     except Exception as e:  # noqa: BLE001 - job isolation
         with _JOB_LOCK:

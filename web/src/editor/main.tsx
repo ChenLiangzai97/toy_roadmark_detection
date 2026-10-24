@@ -319,7 +319,7 @@ function App() {
     dataset: "arrow_editor_batch", count: 16, seed: 42,
     mode: "variants" as "variants" | "random",
   });
-  const [jobInfo, setJobInfo] = useState<{ id: string; status: string; done?: number; total?: number; output_dir?: string } | null>(null);
+  const [jobInfo, setJobInfo] = useState<{ job_id: string; status: string; done?: number; total?: number; output_dir?: string } | null>(null);
 
   const startBatch = async () => {
     const res = await fetch("/api/render-jobs", {
@@ -344,7 +344,8 @@ function App() {
 
   const cancelJob = async () => {
     if (!jobInfo) return;
-    await fetch(`/api/render-jobs/${jobInfo.id}/cancel`, { method: "POST" });
+    await fetch(`/api/render-jobs/${jobInfo.job_id}/cancel`, { method: "POST" });
+    setJobInfo({ ...jobInfo, status: "cancelled" });
   };
 
   /* ------------------------------ selected UI ------------------------------ */
@@ -676,8 +677,10 @@ function App() {
           <canvas ref={bevCanvas} style={{ width: "100%", border: "1px solid #333", imageRendering: "pixelated" }} />
         </>}
         <h4 style={{ margin: "12px 0 6px" }}>batch generation</h4>
-        <NumField label="dataset name" value={0} step={0} onChange={() => {}} />
-        <input value={batch.dataset} onChange={(e) => setBatch({ ...batch, dataset: e.target.value })} style={{ width: "100%", marginBottom: 4 }} />
+        <label style={{ display: "flex", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
+          <span>dataset</span>
+          <input value={batch.dataset} onChange={(e) => setBatch({ ...batch, dataset: e.target.value })} style={{ width: 130 }} />
+        </label>
         <NumField label="count" value={batch.count} step={1} onChange={(v) => setBatch({ ...batch, count: Math.max(1, Math.round(v)) })} />
         <NumField label="seed" value={batch.seed} step={1} onChange={(v) => setBatch({ ...batch, seed: Math.round(v) })} />
         <Row>
