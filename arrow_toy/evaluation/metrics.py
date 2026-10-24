@@ -119,17 +119,19 @@ def summarize(scores: dict, thresholds_m: list[float],
             tp = fp = fn = 0
             errs, angs = [], []
             for fr in frames:
-                matched_gt = 0
+                # a GT counts as detected ONLY when matched by a query
+                # above the confidence cutoff (low-conf matches are FN)
+                matched_above = 0
                 for r in fr["recs"]:
                     if r["matched"]:
-                        matched_gt += 1
                         if r["p"] >= conf:
                             tp += 1
+                            matched_above += 1
                             errs.append(r["err"])
                             angs.append(r["ang"])
                     elif r["p"] >= conf:
                         fp += 1
-                fn += fr["n_gt"] - matched_gt
+                fn += fr["n_gt"] - matched_above
             prec = tp / (tp + fp) if tp + fp else 0.0
             rec = tp / (tp + fn) if tp + fn else 0.0
             f1 = (2 * prec * rec / (prec + rec)) if prec + rec else 0.0

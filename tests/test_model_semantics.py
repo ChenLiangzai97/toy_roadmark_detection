@@ -181,3 +181,24 @@ def test_checkpoint_roundtrip_consistency(tmp_path):
         out2 = model2(imgs, K.to(DEV), T.to(DEV))
     for k in out1:
         assert torch.allclose(out1[k], out2[k], atol=1e-6), k
+
+
+def test_eval_fn_counts_low_conf_matches():
+    """Regression (review): a GT matched only by a below-threshold query
+    must count as FN, not vanish from both TP and FN."""
+    from arrow_toy.evaluation.metrics import match_and_score, summarize
+    pred = {
+        "pred_logits": torch.zeros(1, 2, 7),
+        "pred_center_norm": torch.tensor([[[0.5, 0.5], [0.7, 0.5]]]),
+        "pred_direction_raw": torch.tensor([[[1.0, 0.0], [1.0, 0.0]]]),
+    }
+    pred["pred_logits"][0, 0, 0] = 5.0   # conf ~0.99
+    pred["pred_logits"][0, 1, 0] = -4.6  # conf ~0.01
+    targets = _targets(1, [[(0, 0.5, 0.5, 0.0), (0, 0.7, 0.5, 0.0)]])
+    out = {"preds": []}
+    match_and_score(pred, targets, [0.5], [2.0, 18.0, -4.0, 4.0], out)
+    m = summarize(out, [0.5])
+    # at the selected confidence the second GT is a FN
+    assert m["recall@0.5"] == 0.5, m
+    assert m["precision@0.5"] == 1.0, m
+    assert abs(m["f1@0.5"] - 2 * 0.5 / 1.5) < 1e-6, m
