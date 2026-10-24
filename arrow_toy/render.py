@@ -42,7 +42,7 @@ def build_scenes_for_config(cfg: dict, splits: list[str]) -> dict[str, list[dict
     g = gen.GenConfig(
         bev_range=tuple(cfg["scene"]["default_bev_range"]),
         scale_range=tuple(cfg["arrows"]["scale_range"]),
-        arrow_margin_m=cfg["arrows"]["arrow_margin_m"],
+        arrow_margin_m=cfg["arrows"]["margin_m"],
         n_lanes_range=tuple(cfg["lane_random"]["n_lanes_range"]),
         lane_width_range=tuple(cfg["lane_random"]["width_range"]),
         road_heading_deg_range=(-40.0, 40.0),
@@ -99,6 +99,26 @@ def build_scenes_for_config(cfg: dict, splits: list[str]) -> dict[str, list[dict
     return out
 
 
+def find_chrome() -> str | None:
+    """Locate a usable chromium binary for the render worker.
+
+    Priority: $ARROW_CHROME_BIN, then playwright cache lookups. Needed
+    because `playwright install` downloads are unreliable in this network
+    and we keep a Chrome-for-Testing binary instead of the headless shell.
+    """
+    import os
+    env = os.environ.get("ARROW_CHROME_BIN")
+    if env and pathlib.Path(env).exists():
+        return env
+    home = pathlib.Path.home()
+    for pat in (".cache/ms-playwright/chromium-*/chrome-linux*/chrome",
+                ".cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell"):
+        hits = sorted(home.glob(pat), reverse=True)
+        if hits:
+            return str(hits[0])
+    return None
+
+
 def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
                   n_workers: int, render_url: str | None,
                   id_prefix: str = "") -> dict:
@@ -129,6 +149,11 @@ def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
     chunks = [jobs[i::n_workers] for i in range(n_workers)]
     procs = []
     t0 = time.time()
+    import os
+    env = dict(os.environ)
+    chrome = find_chrome()
+    if chrome:
+        env.setdefault("ARROW_CHROME_BIN", chrome)
     for w, chunk in enumerate(chunks):
         if not chunk:
             continue
@@ -137,7 +162,7 @@ def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
         procs.append(subprocess.Popen(
             ["npx", "tsx", str(WORKER)], cwd=str(REPO / "web"),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True))
+            stderr=subprocess.PIPE, text=True, env=env))
         procs[-1]._payload = payload  # type: ignore[attr-defined]
     results = {"samples": 0, "errors": []}
     for p in procs:

@@ -194,17 +194,10 @@ export class ThreeViewport {
         cal.T_C_E[3][0], cal.T_C_E[3][1], cal.T_C_E[3][2], cal.T_C_E[3][3]
       ).invert();
       const camPos = new THREE.Vector3(0, 0, 0).applyMatrix4(inv);
-      // forward in E: R^T @ (0,0,1)
-      const R = inv.elements;
-      void R;
-      const fwd = new THREE.Vector3(
-        inv.elements[8], inv.elements[9], inv.elements[10]
-      ).sub(camPos).normalize();
-      // camera position from T_C_E^{-1} translation
-      const zC = new THREE.Vector3(0, 0, 1).normalize();
+      // camera axes expressed in ego frame: rows of R_C_E are the camera
+      // axes in ego coords; inv (T_E_C) rotation columns give the same.
       const rot = new THREE.Matrix4().extractRotation(inv);
-      const fwdE = zC.clone().applyMatrix4(rot).normalize();
-      void fwd;
+      const fwdE = new THREE.Vector3(0, 0, 1).applyMatrix4(rot).normalize();
       const upE = new THREE.Vector3(0, -1, 0).applyMatrix4(rot).normalize();
       const rightE = new THREE.Vector3(1, 0, 0).applyMatrix4(rot).normalize();
       const fovV = 2 * Math.atan2(cal.height / 2, cal.K[1][1]);
@@ -277,7 +270,8 @@ export class ThreeViewport {
     this.gizmo.detach();
     if (!this.sel) return;
     if (this.sel.kind === "object") {
-      const obj = scene.objects.find((o) => o.object_id === this.sel!.kind === true ? false : o.object_id === (this.sel as { id: string }).id);
+      const selId = (this.sel as { id: string }).id;
+      const obj = scene.objects.find((o) => o.object_id === selId);
       if (!obj) return;
       const p = new THREE.Object3D();
       p.position.set(...obj.center_ego);

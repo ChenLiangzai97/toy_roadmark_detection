@@ -20,16 +20,17 @@ splits:
   test_clean: 600
   test_occlusion: 200
   test_pose: 200
-arrows_per_frame_dist: # clean sets
-  empty: 0.15
-  one: 0.35
-  two: 0.30
-  three: 0.15
-  four: 0.05
-class_balance: instance_balanced
-scale_range: [0.85, 1.15]
-yaw_range: [-3.141592653589793, 3.141592653589793]
-arrow_margin_m: 0.6            # min gap between arrows
+arrows:
+  per_frame_dist:              # clean sets
+    empty: 0.15
+    one: 0.35
+    two: 0.30
+    three: 0.15
+    four: 0.05
+  class_balance: instance_balanced
+  scale_range: [0.85, 1.15]
+  yaw_range: [-3.141592653589793, 3.141592653589793]
+  margin_m: 0.6                # min gap between arrows
 stress_samples:                 # 8-12 arrows, capacity check set
   count: 8
   arrows: [8, 12]
