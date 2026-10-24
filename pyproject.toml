@@ -1,0 +1,27 @@
+[project]
+name = "arrow-toy"
+version = "0.1.0"
+description = "Toy BEV roadmark arrow detection with editable 3D scene generator"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "pillow",
+  "pyyaml",
+  "fastapi",
+  "uvicorn",
+  "pydantic",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "matplotlib"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["arrow_toy*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,51 @@
+# 10-minute quick mode baseline (design doc 10.2)
+seed: 42
+dataset:
+  root: data/arrow_v1
+  train_split: train
+  val_split: val
+  input_size_hw: [192, 320]
+  camera_ids: [front]
+  cache_images: true
+  cache_grid: true
+model:
+  backbone: tiny_cnn
+  channels: [16, 32, 64, 64]
+  hidden_dim: 64
+  bev_size_hw: [64, 32]
+  bev_range_xy: [2.0, 18.0, -4.0, 4.0]  # xmin,xmax,ymin,ymax
+  bev_encoder: ground_plane
+  num_queries: 32
+  decoder_layers: 2
+  attention_heads: 4
+  ffn_dim: 128
+  dropout: 0.0
+  use_self_attention: true
+train:
+  device: cuda
+  batch_size: 32
+  max_steps: 1500
+  optimizer: adamw
+  lr: 0.001
+  weight_decay: 0.0001
+  warmup_steps: 75
+  min_lr: 0.00003
+  scheduler: cosine
+  grad_clip_norm: 1.0
+  amp_dtype: bfloat16
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  log_every: 50
+  eval_every: 500
+  time_budget_s: 600
+  reserve_finalization_s: 60
+  compile: false
+loss:
+  class_weight: 1.0
+  center_weight: 5.0
+  orientation_weight: 1.0
+  no_object_class_weight: 0.1
+eval:
+  center_thresholds_m: [0.5, 1.0]
+  val_limit: 600

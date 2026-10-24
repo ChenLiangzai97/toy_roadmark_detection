@@ -1,0 +1,46 @@
+<!doctype html><html><body>
+<script type="module">
+import * as THREE from "/web/node_modules/three/build/three.module.js";
+THREE.Object3D.DEFAULT_UP.set(0,0,1);
+// CM on
+const log = (...a) => console.log(...a);
+const renderer = new THREE.WebGLRenderer({antialias:false});
+renderer.setPixelRatio(1);
+const target = new THREE.WebGLRenderTarget(4, 4, {
+  minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+  format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+  depthBuffer: true, stencilBuffer: false, generateMipmaps: false,
+});
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#101418");
+const amb = new THREE.AmbientLight(0xffffff, 0.5); scene.add(amb);
+const mesh = new THREE.Mesh(new THREE.PlaneGeometry(60,40), new THREE.MeshStandardMaterial({color:"#3d423c", roughness:.95}));
+mesh.position.set(20,0,-0.01);
+scene.add(mesh);
+function render(w, h, cam) {
+  if (target.width !== w || target.height !== h) target.setSize(w, h);
+  renderer.setRenderTarget(target);
+  renderer.clear();
+  renderer.render(scene, cam);
+  const buf = new Uint8Array(w*h*4);
+  renderer.readRenderTargetPixels(target, 0, 0, w, h, buf);
+  renderer.setRenderTarget(null);
+  const row = buf.length / h;
+  const flipped = new Uint8Array(buf.length);
+  for (let y = 0; y < h; y++) flipped.set(buf.subarray((h-1-y)*row, (h-1-y)*row+row), y*row);
+  const colors = {};
+  for (let i = 0; i < flipped.length; i += 4) {
+    const k = flipped[i]+","+flipped[i+1]+","+flipped[i+2];
+    colors[k] = (colors[k]||0)+1;
+  }
+  return { colors };
+}
+const ortho = new THREE.OrthographicCamera(4,-4,8,-8,-1,10);
+ortho.position.set(10,0,5); ortho.up.set(1,0,0); ortho.lookAt(10,0,0);
+log("ortho std-mat:", JSON.stringify(render(160, 320, ortho)));
+const persp = new THREE.PerspectiveCamera(60, 160/320, 0.1, 100);
+persp.position.set(0,0,5); persp.lookAt(10,0,0); persp.up.set(1,0,0);
+log("persp std-mat:", JSON.stringify(render(160, 320, persp)));
+mesh.material = new THREE.MeshBasicMaterial({color: "#ff0000"});
+log("ortho basic-mat:", JSON.stringify(render(160, 320, ortho)));
+</script></body></html>

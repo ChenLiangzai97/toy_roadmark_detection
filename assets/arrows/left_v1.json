@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "template_id": "left_v1",
+  "class_id": 1,
+  "class_name": "LEFT",
+  "entry_axis_local": [
+    1.0,
+    0.0
+  ],
+  "anchor_local": [
+    0.0,
+    0.0
+  ],
+  "canonical_size": {
+    "length_a": 1.98,
+    "width_b": 1.62
+  },
+  "primitives": [
+    {
+      "type": "polygon",
+      "points_ab": [
+        [
+          -0.99,
+          -0.81
+        ],
+        [
+          0.51,
+          -0.81
+        ],
+        [
+          0.51,
+          -0.57
+        ],
+        [
+          -0.99,
+          -0.57
+        ]
+      ]
+    },
+    {
+      "type": "polygon",
+      "points_ab": [
+        [
+          0.39,
+          -0.69
+        ],
+        [
+          0.63,
+          -0.69
+        ],
+        [
+          0.63,
+          -0.19
+        ],
+        [
+          0.39,
+          -0.19
+        ]
+      ]
+    },
+    {
+      "type": "polygon",
+      "points_ab": [
+        [
+          0.03,
+          -0.19
+        ],
+        [
+          0.99,
+          -0.19
+        ],
+        [
+          0.51,
+          0.81
+        ]
+      ]
+    }
+  ],
+  "description": "entry rod + 90-degree bend toward +b with arrowhead"
+}

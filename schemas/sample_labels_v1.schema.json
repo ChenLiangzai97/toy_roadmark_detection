@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "toy_roadmark_detection/schemas/sample_labels_v1.schema.json",
+  "title": "SampleLabelsV1",
+  "description": "Per-sample labels for arrow toy dataset: geometry, calibration, per-camera visibility, lanes and supervision flags.",
+  "type": "object",
+  "required": [
+    "schema_version", "sample_id", "scene_group_id", "coordinate_frame",
+    "units", "bev_range", "training_camera_ids", "allow_no_object",
+    "arrows", "lanes"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "sample_id": { "type": "string", "minLength": 1 },
+    "scene_group_id": { "type": "string", "minLength": 1 },
+    "coordinate_frame": { "const": "ego_x_forward_y_left_z_up" },
+    "units": {
+      "type": "object",
+      "properties": {
+        "length": { "const": "m" },
+        "angle": { "const": "rad" }
+      }
+    },
+    "bev_range": {
+      "type": "object",
+      "required": ["x_min", "x_max", "y_min", "y_max"],
+      "properties": {
+        "x_min": { "type": "number" },
+        "x_max": { "type": "number" },
+        "y_min": { "type": "number" },
+        "y_max": { "type": "number" }
+      }
+    },
+    "training_camera_ids": {
+      "type": "array", "minItems": 1, "items": { "type": "string" }
+    },
+    "allow_no_object": { "type": "boolean" },
+    "cameras": {
+      "type": "object",
+      "description": "camera_id -> full calibration record",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["width", "height", "K", "T_C_E", "near", "far"],
+        "properties": {
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
+          "K": { "$ref": "#/definitions/mat3" },
+          "T_C_E": { "$ref": "#/definitions/mat4" },
+          "near": { "type": "number" },
+          "far": { "type": "number" }
+        }
+      }
+    },
+    "arrows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "instance_id", "class_id", "template_id", "center_ego", "yaw_rad",
+          "direction_xy", "scale", "arrow_valid", "orientation_valid",
+          "ignore_reason", "visibility"
+        ],
+        "properties": {
+          "instance_id": { "type": "integer", "minimum": 1 },
+          "class_id": { "type": "integer", "minimum": 0, "maximum": 5 },
+          "template_id": { "type": "string" },
+          "center_ego": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+          "yaw_rad": { "type": "number" },
+          "direction_xy": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "scale": { "type": "number", "exclusiveMinimum": 0 },
+          "lane_id": { "type": ["string", "null"] },
+          "arrow_valid": { "type": "boolean" },
+          "orientation_valid": { "type": "boolean" },
+          "ignore_reason": {
+            "type": ["string", "null"],
+            "enum": [null, "occluded", "truncated", "too_small", "outside_bev",
+                     "outside_camera", "no_visual_evidence", "overlapping_arrow"]
+          },
+          "visibility": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["amodal_px", "visible_px", "occluded_px", "truncated", "in_front", "in_image", "bbox_px", "visible_ratio", "occluded"],
+              "properties": {
+                "amodal_px": { "type": "integer", "minimum": 0 },
+                "visible_px": { "type": "integer", "minimum": 0 },
+                "occluded_px": { "type": "integer", "minimum": 0 },
+                "truncated": { "type": "boolean" },
+                "in_front": { "type": "boolean" },
+                "in_image": { "type": "boolean" },
+                "bbox_px": {
+                  "type": "object",
+                  "properties": {
+                    "x0": { "type": "number" }, "y0": { "type": "number" },
+                    "x1": { "type": "number" }, "y1": { "type": "number" }
+                  }
+                },
+                "visible_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+                "occluded": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lane_id", "centerline_ego", "width_m", "allowed_turns_slr", "world_rule_known", "current_rule_valid"],
+        "properties": {
+          "lane_id": { "type": "string" },
+          "centerline_ego": { "type": "array", "minItems": 2, "items": { "type": "array", "items": { "type": "number" } } },
+          "width_m": { "type": "number" },
+          "allowed_turns_slr": {
+            "type": "array", "minItems": 3, "maxItems": 3,
+            "items": { "type": "integer", "minimum": 0, "maximum": 1 }
+          },
+          "allowed_turns_valid_slr": {
+            "type": "array", "minItems": 3, "maxItems": 3,
+            "items": { "type": "boolean" }
+          },
+          "world_rule_known": { "type": "boolean" },
+          "current_rule_valid": { "type": "boolean" },
+          "rule_source": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "mat4": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "items": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number" } }
+    },
+    "mat3": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } }
+    }
+  }
+}

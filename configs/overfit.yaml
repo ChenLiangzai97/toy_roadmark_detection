@@ -1,0 +1,51 @@
+# Overfit diagnostic run (design doc 16: P4 gate)
+seed: 42
+dataset:
+  root: data/arrow_v1
+  train_split: overfit
+  val_split: overfit
+  input_size_hw: [192, 320]
+  camera_ids: [front]
+  cache_images: true
+  cache_grid: true
+model:
+  backbone: tiny_cnn
+  channels: [16, 32, 64, 64]
+  hidden_dim: 64
+  bev_size_hw: [64, 32]
+  bev_range_xy: [2.0, 18.0, -4.0, 4.0]
+  bev_encoder: ground_plane
+  num_queries: 32
+  decoder_layers: 2
+  attention_heads: 4
+  ffn_dim: 128
+  dropout: 0.0
+  use_self_attention: true
+train:
+  device: cuda
+  batch_size: 8
+  max_steps: 1000
+  optimizer: adamw
+  lr: 0.0005
+  weight_decay: 0.0001
+  warmup_steps: 50
+  min_lr: 0.00003
+  scheduler: cosine
+  grad_clip_norm: 1.0
+  amp_dtype: bfloat16
+  num_workers: 2
+  pin_memory: true
+  persistent_workers: true
+  log_every: 25
+  eval_every: 200
+  time_budget_s: 900
+  reserve_finalization_s: 60
+  compile: false
+loss:
+  class_weight: 1.0
+  center_weight: 5.0
+  orientation_weight: 1.0
+  no_object_class_weight: 0.1
+eval:
+  center_thresholds_m: [0.5, 1.0]
+  val_limit: 32

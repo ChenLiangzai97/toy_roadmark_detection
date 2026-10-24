@@ -1,0 +1,66 @@
+# Data generation config (design doc section 7)
+seed: 42
+output_root: data/arrow_v1
+scene:
+  ground_size: [60, 40]
+  default_bev_range: [2.0, 18.0, -4.0, 4.0]
+  default_camera:
+    camera_id: front
+    width: 320
+    height: 192
+    fov_v_deg: 60
+    position_ego: [0.0, 0.0, 1.7]
+    pitch_down_deg: 12.0
+    near: 0.1
+    far: 100.0
+splits:
+  overfit: 24        # independent simple scenes
+  train: 6000
+  val: 600
+  test_clean: 600
+  test_occlusion: 200
+  test_pose: 200
+arrows_per_frame_dist: # clean sets
+  empty: 0.15
+  one: 0.35
+  two: 0.30
+  three: 0.15
+  four: 0.05
+class_balance: instance_balanced
+scale_range: [0.85, 1.15]
+yaw_range: [-3.141592653589793, 3.141592653589793]
+arrow_margin_m: 0.6            # min gap between arrows
+stress_samples:                 # 8-12 arrows, capacity check set
+  count: 8
+  arrows: [8, 12]
+occlusion_set_mix:              # test_occlusion composition (roughly equal)
+  - partially_occluded
+  - fully_occluded
+  - one_visible_one_occluded
+  - all_occluded
+pose_set_perturb:
+  height_range: [1.3, 2.2]
+  pitch_deg_range: [6, 18]
+  yaw_deg_range: [-10, 10]
+object_random:
+  count_range: [0, 6]
+  shapes: [box, cylinder, car]
+  size_range: [[0.4, 3.0], [0.4, 2.5], [0.3, 2.2]]
+style_random:
+  ground_colors: ["#3d423c", "#40454f", "#4a4a44", "#37403b"]
+  arrow_color: "#f2f2f2"
+  line_color: "#d9d9d9"
+  light_intensity_range: [0.8, 1.3]
+  ambient_range: [0.35, 0.6]
+lane_random:
+  n_lanes_range: [2, 4]
+  width_range: [3.0, 3.8]
+  center_y_offset_range: [-2.0, 2.0]
+fixed_pose_swap_samples: 40     # same layout, swap arrow classes only
+render:
+  workers: 6
+  render_url: null              # null => package file:// path to dist/render.html
+audit:
+  min_per_class_per_split: 8
+prepare_cache:
+  image_dtype: uint8

@@ -1,0 +1,33 @@
+<!doctype html><html><body>
+<script type="module">
+import * as THREE from "/web/node_modules/three/build/three.module.js";
+THREE.Object3D.DEFAULT_UP.set(0,0,1);
+const log = (...a) => { const d = document.createElement("div"); d.textContent = a.join(" "); document.body.appendChild(d); console.log(...a); };
+const renderer = new THREE.WebGLRenderer({antialias:false});
+renderer.setPixelRatio(1);
+const target = new THREE.WebGLRenderTarget(320, 192, {minFilter:THREE.NearestFilter, magFilter:THREE.NearestFilter});
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101418);
+const mesh = new THREE.Mesh(new THREE.PlaneGeometry(60,40), new THREE.MeshBasicMaterial({color: 0xff0000}));
+mesh.position.set(20,0,-0.01);
+scene.add(mesh);
+function read() {
+  if (target.width !== 160 || target.height !== 320) target.setSize(160, 320);
+  const buf = new Uint8Array(160*320*4);
+  renderer.setRenderTarget(target);
+  renderer.render(scene, cam);
+  renderer.readRenderTargetPixels(target, 0,0,160,320, buf);
+  renderer.setRenderTarget(null);
+  let nz=0; for (let i=0;i<buf.length;i+=4) if (buf[i]||buf[i+1]||buf[i+2]) nz++;
+  return nz;
+}
+// ortho
+let cam = new THREE.OrthographicCamera(4,-4,8,-8,0.1,20);
+cam.position.set(10,0,5); cam.up.set(1,0,0); cam.lookAt(10,0,0);
+log("ortho nz:", read());
+// perspective
+cam = new THREE.PerspectiveCamera(60, 160/320, 0.1, 100);
+cam.position.set(0,0,5); cam.lookAt(10,0,0);
+log("persp nz:", read());
+window.__done = true;
+</script></body></html>

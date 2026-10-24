@@ -1,0 +1,3 @@
+# Ablation B: only disable query self-attention (design doc 12)
+model:
+  use_self_attention: false

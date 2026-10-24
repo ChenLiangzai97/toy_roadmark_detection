@@ -1,0 +1,33 @@
+<!doctype html><html><body>
+<script type="module">
+import * as THREE from "/web/node_modules/three/build/three.module.js";
+THREE.Object3D.DEFAULT_UP.set(0,0,1);
+const renderer = new THREE.WebGLRenderer({antialias:false});
+renderer.setPixelRatio(1);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#101418");
+const mesh = new THREE.Mesh(new THREE.PlaneGeometry(60,40), new THREE.MeshBasicMaterial({color: "#ff0000"}));
+mesh.position.set(20,0,-0.01);
+scene.add(mesh);
+const ortho = new THREE.OrthographicCamera(4,-4,8,-8,0.1,20);
+ortho.position.set(10,0,5); ortho.up.set(1,0,0); ortho.lookAt(10,0,0);
+function mkTarget(w,h) { return new THREE.WebGLRenderTarget(w,h,{minFilter:THREE.NearestFilter, magFilter:THREE.NearestFilter}); }
+function render(target, w, h, cam, doClear) {
+  if (target.width !== w) target.setSize(w, h);
+  renderer.setRenderTarget(target);
+  if (doClear) renderer.clear();
+  renderer.render(scene, cam);
+  const buf = new Uint8Array(w*h*4);
+  renderer.readRenderTargetPixels(target, 0, 0, w, h, buf);
+  renderer.setRenderTarget(null);
+  const colors = {};
+  for (let i = 0; i < buf.length; i += 4) {
+    const k = buf[i]+","+buf[i+1]+","+buf[i+2];
+    colors[k] = (colors[k]||0)+1;
+  }
+  return colors;
+}
+console.log("A 320x192 target, no clear:", JSON.stringify(render(mkTarget(320,192), 160, 320, ortho, false)));
+console.log("B 4x4 target, no clear:", JSON.stringify(render(mkTarget(4,4), 160, 320, ortho, false)));
+console.log("C 4x4 target, clear:", JSON.stringify(render(mkTarget(4,4), 160, 320, ortho, true)));
+</script></body></html>
