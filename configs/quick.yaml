@@ -37,7 +37,7 @@ train:
   pin_memory: true
   persistent_workers: true
   log_every: 50
-  eval_every: 500
+  eval_every: 1500  # final-only mid-run evals skipped for time budget
   time_budget_s: 600
   reserve_finalization_s: 60
   compile: false

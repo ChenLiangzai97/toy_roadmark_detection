@@ -116,8 +116,12 @@ def run_audit(root: pathlib.Path, expected_splits: list[str] | None = None,
     for split in splits:
         infos[split] = audit_split(root, split)
         info = infos[split]
+        # stress is an 8-sample capacity probe; class-coverage gate does not
+        # apply (documented), everything else does
+        eff_min = 1 if split == "stress" else min_class
+        info["effective_min_class"] = eff_min
         info["pass"] = bool(info["n_samples"] > 0
-                            and info["min_class_instances"] >= min_class
+                            and info["min_class_instances"] >= eff_min
                             and info["invariant_violation_count"] == 0)
     leaks = check_no_split_leakage(infos)
     # occlusion/pose diagnostics: ignore reasons expected non-zero there

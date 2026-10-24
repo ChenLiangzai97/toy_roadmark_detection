@@ -21,6 +21,12 @@ import time
 
 import numpy as np
 import torch
+
+# fixed input shapes -> cudnn autotune; TF32 allowed for fp32 matmuls
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 from torch.utils.data import DataLoader
 
 from arrow_toy.data.dataset import ArrowCacheDataset, make_collate
@@ -120,7 +126,7 @@ def main(argv=None) -> int:
         device = "cpu"
 
     # data
-    root = REPO / cfg["dataset"]["root"]
+    root = pathlib.Path(cfg["dataset"]["root"])
     train_ds = ArrowCacheDataset(root, cfg["dataset"]["train_split"])
     val_ds = ArrowCacheDataset(root, cfg["dataset"]["val_split"])
     train_loader = DataLoader(

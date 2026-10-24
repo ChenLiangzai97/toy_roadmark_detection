@@ -33,9 +33,10 @@ class PreLNDecoderLayer(nn.Module):
             a = self.ln_self(h)
             h = h + self.self_attn(a + q, a + q, a, need_weights=False)[0]
         a = self.ln_cross(h)
+        pad = ~memory_valid.to(torch.bool)  # True = masked/invalid memory
         h = h + self.cross_attn(
             a + q, memory + p, memory,
-            key_padding_mask=~memory_valid, need_weights=False)[0]
+            key_padding_mask=pad, need_weights=False)[0]
         h = h + self.ffn(self.ln_ffn(h))
         return h
 

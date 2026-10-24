@@ -66,59 +66,58 @@ def arrow_criterion(pred: dict, targets: dict, matches,
     raw_dir = pred["pred_direction_raw"].float()
     B, Q = logits.shape[:2]
 
-    cls_losses = []
-    center_losses = []
-    ori_losses = []
-    n_pos = 0
-    n_ori = 0
+    # ---- build classification targets for the whole batch (vectorized) ----
+    tgt = torch.full((B, Q), IGNORE_INDEX, dtype=torch.long,
+                     device=logits.device)
+    pos_b, pos_q, pos_g = [], [], []
     for b in range(B):
         qi, gi = matches[b]
-        allow_no = bool(targets["allow_no_object"][b])
-        tgt = torch.full((Q,), IGNORE_INDEX, dtype=torch.long,
-                         device=logits.device)
-        if gi:
-            valid_idx = torch.nonzero(targets["mask"][b] > 0).squeeze(-1)
-            gt_rows = valid_idx[torch.tensor(gi, device=logits.device)]
-            tgt[torch.tensor(qi, device=logits.device)] = targets["cls"][b][gt_rows]
-        unmatched = (tgt == IGNORE_INDEX).nonzero().squeeze(-1)
-        if allow_no:
-            tgt[unmatched] = NO_OBJECT
-        keep = tgt != IGNORE_INDEX
-        if keep.any():
-            w = torch.ones(NUM_CLASSES + 1, device=logits.device)
-            w[NO_OBJECT] = no_object_weight
-            cls_losses.append(
-                F.cross_entropy(logits[b][keep], tgt[keep], weight=w))
+        if not gi:
+            continue
+        valid_idx = torch.nonzero(targets["mask"][b] > 0).squeeze(-1)
+        gt_rows = valid_idx[torch.tensor(gi, device=logits.device)]
+        q_t = torch.tensor(qi, device=logits.device)
+        tgt[b, q_t] = targets["cls"][b][gt_rows]
+        pos_b.extend([b] * len(qi))
+        pos_q.extend(qi)
+        pos_g.extend(gt_rows.tolist())
+    allow = targets["allow_no_object"].to(logits.device).view(B, 1)
+    unmatched_and_ignored = (tgt == IGNORE_INDEX)
+    background_mask = unmatched_and_ignored & allow
+    tgt[background_mask] = NO_OBJECT
+
+    # classification CE (weighted mean over participating queries)
+    keep = tgt != IGNORE_INDEX
+    if keep.any():
+        w = torch.ones(NUM_CLASSES + 1, device=logits.device)
+        w[NO_OBJECT] = no_object_weight
+        cls_loss = F.cross_entropy(logits[keep], tgt[keep], weight=w)
+    else:
+        cls_loss = logits.sum() * 0.0
+
+    n_pos = len(pos_q)
+    if n_pos:
+        q_idx = torch.tensor(pos_q, device=logits.device)
+        b_idx = torch.tensor(pos_b, device=logits.device)
+        g_idx = torch.tensor(pos_g, device=logits.device)
+        pred_c = centers[b_idx, q_idx]
+        gt_c = targets["center"][b_idx, g_idx]
+        center_loss = (pred_c - gt_c).abs().sum(-1).mean()
+        ov = targets["orientation_valid"][b_idx, g_idx] > 0
+        if ov.any():
+            d_pred, ok = safe_norm(raw_dir[b_idx[ov], q_idx[ov]])
+            d_gt = targets["dir"][b_idx, g_idx][ov]
+            ok_f = ok.float()
+            cos = (d_pred * d_gt).sum(-1)
+            ori_loss = ((1 - cos) * ok_f).sum() / ok_f.sum().clamp_min(1.0)
+            n_ori = int(ov.sum())
         else:
-            cls_losses.append(logits[b].sum() * 0.0)
-        if gi:
-            q_idx = torch.tensor(qi, device=logits.device)
-            g_idx = torch.tensor(gi, device=logits.device)
-            pred_c = centers[b][q_idx]
-            valid_rows = torch.nonzero(targets["mask"][b] > 0).squeeze(-1)
-            gt_rows = valid_rows[g_idx]
-            gt_c = targets["center"][b][gt_rows]
-            center_losses.append((pred_c - gt_c).abs().sum(-1).mean())
-            n_pos += len(qi)
-            # orientation on matched with orientation_valid
-            ov = targets["orientation_valid"][b][gt_rows] > 0
-            if ov.any():
-                d_pred, ok = safe_norm(raw_dir[b][q_idx[ov]])
-                d_gt = targets["dir"][b][gt_rows[ov]]
-                ok_f = ok.float()
-                # cosine loss: 1 - dot; zero-vector rows contribute 0 grad
-                cos = (d_pred * d_gt).sum(-1)
-                loss = ((1 - cos) * ok_f).sum() / ok_f.sum().clamp_min(1.0)
-                ori_losses.append(loss)
-                n_ori += int(ov.sum())
-            else:
-                ori_losses.append(raw_dir[b].sum() * 0.0)
-        else:
-            center_losses.append(centers[b].sum() * 0.0)
-            ori_losses.append(raw_dir[b].sum() * 0.0)
-    cls_loss = torch.stack(cls_losses).mean()
-    center_loss = torch.stack(center_losses).mean()
-    ori_loss = torch.stack(ori_losses).mean()
+            ori_loss = raw_dir.sum() * 0.0
+            n_ori = 0
+    else:
+        center_loss = centers.sum() * 0.0
+        ori_loss = raw_dir.sum() * 0.0
+        n_ori = 0
     total = (class_weight * cls_loss + center_weight * center_loss
              + orientation_weight * ori_loss)
     stats = {"n_pos": n_pos, "n_ori": n_ori}

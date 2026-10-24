@@ -37,7 +37,7 @@ train:
   pin_memory: true
   persistent_workers: true
   log_every: 25
-  eval_every: 200
+  eval_every: 1200
   time_budget_s: 900
   reserve_finalization_s: 60
   compile: false

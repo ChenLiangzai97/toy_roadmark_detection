@@ -129,32 +129,62 @@ class GroundPlaneBevEncoder(nn.Module):
         grid_sample runs in FP32 outside autocast (design doc 8.3).
         """
         B, C, Hf, Wf = image_features.shape
-        tokens = []
-        valids = []
-        for b in range(B):
-            key = _GRID_CACHE.key(K[b], T_C_E[b], (Hf, Wf),
-                                  self.img_hw, self.bev_range, self.bev_hw)
-            hit = _GRID_CACHE.get(key, image_features.device)
-            if hit is None:
-                grid, valid = build_sampling_grid(
-                    K[b], T_C_E[b], self.bev_range, self.bev_hw, self.img_hw)
-                _GRID_CACHE.put(key, grid, valid)
+        # keys are computed on CPU (no GPU sync); the fixed-camera dataset
+        # hits ONE cache entry for the whole batch -> single grid_sample
+        keys = [_GRID_CACHE.key(K[b].detach().cpu(), T_C_E[b].detach().cpu(),
+                                (Hf, Wf), self.img_hw, self.bev_range,
+                                self.bev_hw) for b in range(B)]
+        unique = set(keys)
+        with torch.autocast(device_type="cuda", enabled=False), \
+                torch.autocast(device_type="cpu", enabled=False):
+            feat32 = image_features.float()
+            if len(unique) == 1:
+                key = keys[0]
+                hit = _GRID_CACHE.get(key, image_features.device)
+                if hit is None:
+                    grid, valid = build_sampling_grid(
+                        K[0].float().cpu(), T_C_E[0].float().cpu(),
+                        self.bev_range, self.bev_hw, self.img_hw)
+                    _GRID_CACHE.put(key, grid, valid)
+                else:
+                    grid, valid = hit
+                g = grid.to(image_features.device, torch.float32)
+                stacked = F.grid_sample(
+                    feat32, g.unsqueeze(0).expand(B, -1, -1, -1),
+                    mode="bilinear", padding_mode="zeros",
+                    align_corners=False)
+                valid_b = valid.to(image_features.device).unsqueeze(0).expand(B, -1, -1)
+                if camera_valid is not None:
+                    valid_b = valid_b & camera_valid.view(B, 1, 1).bool()
             else:
-                grid, valid = hit
-            feat = image_features[b:b + 1].float()
-            sampled = F.grid_sample(
-                feat, grid.unsqueeze(0), mode="bilinear",
-                padding_mode="zeros", align_corners=False)
-            tokens.append(sampled[0])          # [C,H,W]
-            v = valid
-            if camera_valid is not None and not bool(camera_valid[b]):
-                v = torch.zeros_like(v)
-            valids.append(v)
-        stacked = torch.stack(tokens, dim=0)    # [B,C,H,W] float32
+                tokens = []
+                valids = []
+                for b in range(B):
+                    hit = _GRID_CACHE.get(keys[b], image_features.device)
+                    if hit is None:
+                        grid, valid = build_sampling_grid(
+                            K[b].float().cpu(), T_C_E[b].float().cpu(),
+                            self.bev_range, self.bev_hw, self.img_hw)
+                        _GRID_CACHE.put(keys[b], grid, valid)
+                    else:
+                        grid, valid = hit
+                    g = grid.to(image_features.device, torch.float32)
+                    sampled = F.grid_sample(
+                        feat32[b:b + 1], g.unsqueeze(0), mode="bilinear",
+                        padding_mode="zeros", align_corners=False)
+                    tokens.append(sampled[0])
+                    v = valid.to(image_features.device)
+                    if camera_valid is not None and not bool(camera_valid[b]):
+                        v = torch.zeros_like(v)
+                    valids.append(v)
+                stacked = torch.stack(tokens, dim=0)
+                valid_b = torch.stack(valids, dim=0)
+        stacked = stacked.to(image_features.dtype)  # restore for neck
+        valid_flat = valid_b
         bev = self.neck(stacked)
         B2, C2, H2, W2 = bev.shape
         flat = bev.flatten(2).transpose(1, 2)   # [B, HW, C] row-major r*W+c
-        valid = torch.stack(valids, dim=0).flatten(1)  # [B, HW]
+        valid = valid_b.flatten(1)              # [B, HW]
         if not bool(valid.any()):
             raise RuntimeError(
                 "no valid BEV cells: check camera / BEV range configuration")

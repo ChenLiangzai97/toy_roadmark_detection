@@ -101,3 +101,75 @@ implementation decisions, interface deviations and their reasons, per phase.
 
 - P2 editor UI, P3 full dataset + audit + cache, P4 model/training,
   P5 quick mode, P6 ablation, P7 final docs. Editor server API pending.
+
+
+## P3 - Data (full generation)
+
+- Full dataset generated with configs/data_v1.yaml (master seed 42):
+  overfit 48 (8/class), train 6040 (incl. 40 class-swap controls),
+  val 600, test_clean 600, test_occlusion 200, test_pose 200, stress 8.
+  Render: 6 Playwright workers, zero errors, ~11 min total, 358 MB on disk.
+- audit.json: no scene_group leakage across splits; invariant violations 0;
+  class min per split: overfit 8, train 1323, val 134, clean 121,
+  occlusion 34, pose 37 (stress exempt from the class gate: 8-sample
+  capacity probe). manifest.completed=true after audit.
+- Ignore distribution: train 131 too_small + 1 occluded (free far arrows
+  whose real projected area < 64 px); occlusion set 240 occluded / 257
+  arrows; pose set 4 too_small. allow_no_object=true on 97.8% of train
+  frames (empty 15% + clean frames), blocked only where ignored arrows
+  exist.
+- yaw coverage: all 8 buckets have samples (bucket 3/4 heavy from the
+  +-40 deg road heading; free arrows spread the rest).
+- Class balance is enforced at SPLIT level (a per-scene counter was a bug
+  found by review probing - fixed with regression coverage).
+- Cache: images npy uint8 (mmap) + calib/targets npz per split, 1.4 GB.
+  Training touches only RGB + small tensors per step.
+
+## P4 - Model/training
+
+- Model params: 177,739 trainable (< 0.5M target).
+- P4 gate PASSED: overfit run (48 simple scenes, 1000 steps, 60.5 s wall):
+  train P/R = 1.0/1.0, center err 0.032 m (<=0.2), angle err 0.98 deg
+  (<=5). runs/overfit/result.json.
+- 8 semantic tests: gradient flow, ignore/empty supervision rules, GT
+  order invariance, capacity>32 refusal, angle continuity, ckpt roundtrip.
+
+## Hardware anomaly (IMPORTANT for interpreting P5 numbers)
+
+- The RTX 4080 on this host performs ~5-10x below spec: 4096^3 BF16
+  matmul 9.1 ms (healthy 4080 ~1.5-2 ms); simple conv fwd+bwd 45 ms.
+  nvidia-smi reports ERR!/not-ready clocks, P0, 24 W idle. Driver 535.
+  Training step (batch 32) is ~0.36 s vs ~0.05-0.08 s expected.
+  All timing numbers below are REAL measurements on THIS host.
+
+## P5 - Quick mode (seed 42 baseline)
+
+- benchmark (runs/benchmark.json): median step 0.503 s -> optimized to
+  ~0.36 s by batching grid_sample for shared calibrations + vectorized
+  criterion + cudnn.benchmark/TF32 (all recorded).
+- baseline_s42: status=success, 1500/1500 steps, wall 543.9 s <= 600 s
+  budget PASS, peak mem 1.12 GB (<=12 GB).
+- Val: f1@0.5 0.305 (conf 0.6 selected on val), center err 0.254 m,
+  angle err 16.4 deg, empty-frame FP 0.054 (<=0.10 PASS).
+- test_clean: f1 0.312; test_occlusion: f1 0.390 with the design-11.2
+  ignore-region suppression (0.158 without - suppression implemented and
+  reported separately).
+- ENGINEERING TARGETS NOT MET: mAP/F1 >=0.85, angle <=10 deg. Diagnostics
+  (design 15.2 order): coordinates/masks/yaw verified (P0/P1 tests);
+  16-48 sample overfit passes; ORACLE diagnostic (15.2.6: GT class+occupancy
+  painted directly into BEV tokens) reaches only f1 0.55 after 1200 steps
+  at batch 64 -> the SPARSE HEAD + one-to-one matching convergence is the
+  bottleneck at 1500 steps, NOT the BEV features. This is the classic
+  DETR slow-convergence regime; the fixed quick-mode step budget
+  (1500 x batch 32 = ~8 epochs) is insufficient on this task. lr 5e-4
+  variant was WORSE (f1 0.266). Reported honestly rather than tuning
+  thresholds to look better.
+
+## P6 - A/B ablation (seed 42 first pass)
+
+- no_sa_s42 (query self-attention OFF): f1@0.5 0.465 vs baseline 0.305
+  (+52% relative) at identical budget/steps/params-minus-SA. Consistent
+  with oracle finding: SA adds churn early. Seeds 43/44 repetition runs
+  queued; means+variance in the final comparison table.
+- Ablation E (dense heatmap head on the same BEV features) implemented
+  (arrow_toy/models/dense_head.py) as the designed bottleneck check.
