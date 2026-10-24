@@ -209,3 +209,28 @@ implementation decisions, interface deviations and their reasons, per phase.
   1000 steps, 54.35 s; data_version a065b96fe99c9dbd; commit fe64ded.
   f1@0.5 0.984, mAP@0.5 1.000, macro_f1 0.985, center err 0.021 m,
   angle err 0.52 deg -> P4 diagnostic gate PASSED.
+
+
+## P5/P6 final numbers (fixed evaluator, checkpoint re-inference,
+data_version a065b96fe99c9dbd, all runs budget-capped 600 s)
+
+| run | seed | f1@0.5 | mAP@0.5 | macroF1 | test_clean f1 | test_occ f1 | wall s | status |
+|---|---|---|---|---|---|---|---|---|
+| baseline A (SA on) | 42 | 0.177 | 0.170 | 0.144 | 0.188 | 0.276 | 543.9 | success |
+| baseline A | 43 | 0.253 | 0.177 | 0.205 | 0.241 | 0.167 | 546.7 | budget_incomplete(1369) |
+| baseline A | 44 | 0.355 | 0.264 | 0.376 | 0.386 | 0.104 | 544.9 | success |
+| no_sa B (SA off) | 42 | 0.402 | 0.283 | 0.397 | 0.364 | 0.270 | 543.0 | success |
+| no_sa B | 43 | 0.438 | 0.372 | 0.449 | 0.436 | 0.291 | 543.6 | success |
+| no_sa B | 44 | 0.451 | 0.349 | 0.443 | 0.457 | 0.078 | 543.0 | success |
+| lr 5e-4 (A) | 42 | 0.183 | 0.115 | 0.177 | 0.202 | 0.138 | 544.0 | success |
+
+- A: mean f1 0.262 +- 0.089; B: 0.430 +- 0.025. B wins on EVERY seed with
+  lower variance -> at this fixed budget, query self-attention HURTS.
+- All accuracy targets (f1>=0.85, mAP>=0.75, angle<=10 deg) NOT MET.
+  Center error 0.21-0.28 m (target 0.35 met), empty-frame FP <=0.054 met,
+  time budget met on every run, memory 1.12 GB met.
+- Attribution status (per review): sparse-head/matching convergence is
+  the working hypothesis - supported by (a) overfit 0.98 f1 at 1000 steps
+  (machinery learns), (b) oracle-BEV probe reaching only ~0.55 at 1200
+  steps x batch 64, (c) B>A consistently. NOT a verified root cause; the
+  designed next single-variable experiment is ablation E (dense head).

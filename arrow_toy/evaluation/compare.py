@@ -17,16 +17,30 @@ def collect(run: pathlib.Path) -> dict:
     res = json.loads((run / "result.json").read_text())
     env = json.loads((run / "environment.json").read_text())
     cfg = json.loads((run / "resolved_config.json").read_text())
+    # prefer the checkpoint re-inference eval (fixed evaluator) over the
+    # training-time metrics when present
     m = res["metrics"]
+    eval_val = run / "eval_val.json"
+    if eval_val.exists():
+        m = json.loads(eval_val.read_text())["metrics"]
+    clean = run / "eval_test_clean.json"
+    occ = run / "eval_test_occlusion.json"
+    clean_m = json.loads(clean.read_text())["metrics"] if clean.exists() else {}
+    occ_m = json.loads(occ.read_text())["metrics"] if occ.exists() else {}
     return {
         "run": run.name,
         "seed": res.get("seed", cfg.get("seed")),
         "params": env["params"]["trainable"],
         "self_attention": cfg["model"].get("use_self_attention", True),
         "completed_steps": res["completed_steps"],
-        "train_samples": None,  # from cache stats
+        "train_samples": None,
+        "data_version": env.get("data_version"),
         "f1@0.5": round(m.get("f1@0.5", 0.0), 4),
+        "map@0.5": round(m.get("map@0.5", 0.0), 4) if m.get("map@0.5") is not None else None,
+        "macro_f1@0.5": round(m.get("macro_f1@0.5", 0.0), 4),
         "chosen_conf": m.get("chosen_conf_threshold"),
+        "test_clean_f1@0.5": round(clean_m.get("f1@0.5", 0.0), 4) if clean_m else None,
+        "test_occlusion_f1@0.5": round(occ_m.get("f1@0.5", 0.0), 4) if occ_m else None,
         "center_err_m@0.5": m.get("center_err_m@0.5"),
         "ang_err_deg@0.5": m.get("ang_err_deg@0.5"),
         "empty_frame_fp": m.get("empty_frame_fp_avg"),
@@ -59,7 +73,9 @@ def main(argv=None) -> int:
     (out_dir / "comparison.json").write_text(json.dumps(rows, indent=1))
     # markdown table
     cols = ["run", "seed", "params", "self_attention", "completed_steps",
-            "f1@0.5", "chosen_conf", "center_err_m@0.5", "ang_err_deg@0.5",
+            "f1@0.5", "map@0.5", "macro_f1@0.5", "chosen_conf",
+            "test_clean_f1@0.5", "test_occlusion_f1@0.5",
+            "center_err_m@0.5", "ang_err_deg@0.5",
             "empty_frame_fp", "wall_clock_s", "peak_mem_gb", "status"]
     lines = ["| " + " | ".join(cols) + " |",
              "|" + "---|" * len(cols)]
