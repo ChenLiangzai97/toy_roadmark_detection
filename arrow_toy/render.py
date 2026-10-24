@@ -17,6 +17,10 @@ import subprocess
 import sys
 import time
 
+import numpy as np
+
+from PIL import Image
+
 from arrow_toy.data import generate as gen
 from arrow_toy.data.labels import build_labels, decode_instance_ids
 from arrow_toy.utils.config import load_yaml
@@ -96,15 +100,18 @@ def build_scenes_for_config(cfg: dict, splits: list[str]) -> dict[str, list[dict
 
 
 def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
-                  n_workers: int, render_url: str | None) -> dict:
-    """Spawn node workers; returns summary stats."""
-    import numpy as np
+                  n_workers: int, render_url: str | None,
+                  id_prefix: str = "") -> dict:
+    """Spawn node workers; returns summary stats.
 
+    id_prefix makes sample ids globally unique across splits when scenes
+    from several splits share the same samples/ directory.
+    """
     split_dir = out_root / "samples"
     split_dir.mkdir(parents=True, exist_ok=True)
     jobs = []
     for i, scene in enumerate(scenes, start=1):
-        sample_id = f"{i:06d}"
+        sample_id = f"{id_prefix}{i:06d}"
         out_dir = split_dir / sample_id
         item = {
             "sample_id": sample_id,
@@ -155,12 +162,13 @@ def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
 
 
 def postprocess_labels(scenes: list[dict], out_root: pathlib.Path,
-                       camera_id: str = "front") -> int:
+                       camera_id: str = "front",
+                       id_prefix: str = "") -> int:
     """Read masks, compute labels, write labels.json + verify ID legality."""
     samples_dir = out_root / "samples"
     n = 0
     for i, scene in enumerate(scenes, start=1):
-        sample_id = f"{i:06d}"
+        sample_id = f"{id_prefix}{i:06d}"
         sdir = samples_dir / sample_id
         visible_ids = decode_instance_ids(sdir / "masks" / f"{camera_id}_visible.png")
         assigned = {a["instance_id"] for a in scene["arrows"]} | {0}
@@ -172,8 +180,7 @@ def postprocess_labels(scenes: list[dict], out_root: pathlib.Path,
         amodal_masks = {}
         for a in scene["arrows"]:
             p = sdir / "masks" / "amodal" / camera_id / f"{a['instance_id']}.png"
-            arr = np.asarray(__import__("PIL.Image", fromlist=["Image"])
-                             .open(p).convert("L"), dtype=np.uint8)
+            arr = np.asarray(Image.open(p).convert("L"), dtype=np.uint8)
             amodal_masks[a["instance_id"]] = arr > 127
         labels = build_labels(sample_id, scene, camera_id, visible_ids,
                               amodal_masks)
@@ -184,12 +191,19 @@ def postprocess_labels(scenes: list[dict], out_root: pathlib.Path,
     return n
 
 
-def write_splits(out_root: pathlib.Path, scenes_by_split: dict[str, list[dict]]) -> None:
+def write_splits(out_root: pathlib.Path, scenes_by_split: dict[str, list[dict]],
+                 id_prefixes: dict[str, str] | None = None) -> None:
     splits_dir = out_root / "splits"
     splits_dir.mkdir(parents=True, exist_ok=True)
+    prefixes = id_prefixes or {}
+    all_ids: list[str] = []
     for split, scenes in scenes_by_split.items():
-        ids = [f"{i:06d}" for i in range(1, len(scenes) + 1)]
+        pre = prefixes.get(split, "")
+        ids = [f"{pre}{i:06d}" for i in range(1, len(scenes) + 1)]
+        all_ids.extend(ids)
         (splits_dir / f"{split}.txt").write_text("\n".join(ids) + "\n")
+    if len(all_ids) != len(set(all_ids)):
+        raise RuntimeError("sample ids are not unique across splits")
 
 
 def main(argv=None) -> int:
@@ -234,16 +248,19 @@ def main(argv=None) -> int:
         print("[render] dry-run complete")
         return 0
 
+    prefixes: dict[str, str] = {}
     for split, scenes in scenes_by_split.items():
-        res = render_scenes(scenes, out_root, split, n_workers, args.render_url)
+        prefixes[split] = f"{split}_"
+        res = render_scenes(scenes, out_root, split, n_workers,
+                            args.render_url, id_prefix=prefixes[split])
         if res["samples"] != len(scenes):
             print(f"[render] {split}: incomplete render "
                   f"({res['samples']}/{len(scenes)}); aborting")
             return 3
-        n = postprocess_labels(scenes, out_root)
+        n = postprocess_labels(scenes, out_root, id_prefix=prefixes[split])
         print(f"[render] {split}: {n} labels written", flush=True)
 
-    write_splits(out_root, scenes_by_split)
+    write_splits(out_root, scenes_by_split, prefixes)
     manifest = {
         "dataset": "arrow_v1",
         "config": cfg,
