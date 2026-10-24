@@ -130,6 +130,7 @@ def render_scenes(scenes: list[dict], out_root: pathlib.Path, split: str,
     split_dir = out_root / "samples"
     split_dir.mkdir(parents=True, exist_ok=True)
     jobs = []
+    split_dir = split_dir.resolve()  # worker runs with cwd=web/
     for i, scene in enumerate(scenes, start=start_index):
         sample_id = f"{id_prefix}{i:06d}"
         out_dir = split_dir / sample_id

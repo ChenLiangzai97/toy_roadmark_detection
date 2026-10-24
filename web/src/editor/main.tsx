@@ -164,9 +164,14 @@ function App() {
             if (o) {
               o.center_ego = [t.pos[0], t.pos[1], t.pos[2]];
               o.yaw_rad = t.rotZ;
-              if (t.scale !== 1 && o.size_abc) {
-                // gizmo uniform scale multiplies per-axis size
-                o.size_abc = o.size_abc.map((v) => Math.max(0.05, v * t.scale)) as [number, number, number];
+              if (o.size_abc && t.scale.some((v) => v !== 1)) {
+                // per-axis gizmo scale multiplies each object dimension
+                const [sx, sy, sz] = t.scale;
+                o.size_abc = [
+                  Math.max(0.05, o.size_abc[0] * sx),
+                  Math.max(0.05, o.size_abc[1] * sy),
+                  Math.max(0.05, o.size_abc[2] * sz),
+                ];
               }
             }
           } else if (s.kind === "arrow") {
@@ -174,7 +179,12 @@ function App() {
             if (a) {
               a.center_ego = [t.pos[0], t.pos[1], 0];
               a.yaw_rad = t.rotZ;
-              if (t.scale !== 1) a.scale = Math.max(0.1, a.scale * t.scale);
+              // arrows keep aspect ratio: uniform scale from the geometric
+              // mean of the gizmo axes (design doc 5.2)
+              if (t.scale.some((v) => v !== 1)) {
+                const g = Math.cbrt(t.scale[0] * t.scale[1] * t.scale[2]);
+                a.scale = Math.max(0.1, a.scale * g);
+              }
             }
           } else if (s.kind === "lane_line_point") {
             const line = next.lane_lines.find((l) => l.line_id === (s as { lineId: string }).lineId);
@@ -224,6 +234,12 @@ function App() {
     });
     vpRef.current = vp;
   }, []);
+
+  // e2e hook: full scene snapshot for tests (documented; not used by logic)
+  useEffect(() => {
+    (window as unknown as { __sceneSnapshot: () => SceneV1 }).__sceneSnapshot =
+      () => JSON.parse(JSON.stringify(scene));
+  }, [scene]);
 
   const selRef = useRef(sel); selRef.current = sel;
   const toolRef = useRef(tool); toolRef.current = tool;
@@ -665,6 +681,7 @@ function App() {
         <Row>
           <Btn active={gizmoMode === "translate"} onClick={() => setGizmoMode("translate")}>move</Btn>
           <Btn active={gizmoMode === "rotate"} onClick={() => setGizmoMode("rotate")}>rotate</Btn>
+          <Btn active={gizmoMode === "scale"} onClick={() => setGizmoMode("scale")}>scale</Btn>
         </Row>
         <Row>
           <Btn active={topView} onClick={() => setTopView(!topView)}>top view</Btn>

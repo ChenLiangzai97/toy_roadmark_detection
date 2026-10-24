@@ -72,6 +72,7 @@ def default_camera(cfg: GenConfig, rng: Optional[random.Random] = None,
     return {
         "camera_id": "front", "width": cfg.cam_width, "height": cfg.cam_height,
         "K": K.K(), "T_C_E": T, "near": cfg.near, "far": cfg.far,
+        "position_ego": pos,  # metadata only; T_C_E is the source of truth
     }
 
 
@@ -408,7 +409,7 @@ def make_scene(split: str, layout: _Layout, variant_idx: int, master_seed: int,
 
     # objects
     objects: list[dict] = []
-    cam_pos = list(cfg.cam_position) if not pose_perturb else cam["_pos_cache"]
+    cam_pos = list(cam["position_ego"])
     if occlusion_mode:
         objects = _occlusion_objects(rng, scene_arrows, occlusion_mode, K, T_C_E, cfg)
     elif not stress:
@@ -438,6 +439,7 @@ def make_scene(split: str, layout: _Layout, variant_idx: int, master_seed: int,
                 objects.append(obj)
                 break
 
+    cam_out = {k: v for k, v in cam.items() if k != "position_ego"}
     scene = {
         "schema_version": 1,
         "scene_id": scene_id,
@@ -454,7 +456,7 @@ def make_scene(split: str, layout: _Layout, variant_idx: int, master_seed: int,
         "lane_lines": layout.lane_lines,
         "lanes": layout.lanes,
         "arrows": scene_arrows,
-        "cameras": [cam],
+        "cameras": [cam_out],
         "render": {
             "light": {
                 "direction_ego": [rng.uniform(-0.8, 0.2), rng.uniform(-0.8, 0.8),

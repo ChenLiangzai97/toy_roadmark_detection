@@ -8,6 +8,7 @@ undo/redo and import validation of an unknown schema version.
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import socket
 import subprocess
@@ -210,6 +211,13 @@ def test_editor_full_flow(tmp_path):
                     if len(s["arrows"]) > 1 else
                     s["arrows"].append({**s["arrows"][0],
                                         "instance_id": s["arrows"][0]["instance_id"]}))),
+                "missing_seed": {k: v for k, v in good.items() if k != "seed"},
+                "object_missing_fields": _mutate(good, lambda s: s["objects"].__setitem__(
+                    0, {"object_id": "x", "shape": "box"})),
+                "bad_focal": _mutate(good, lambda s: s["cameras"][0]["K"].__setitem__(
+                    0, [0, 0, 160])),
+                "unknown_template": _mutate(good, lambda s: s["arrows"][0].__setitem__(
+                    "template_id", "banana_v9")),
             }
             for name, payload in bad_cases.items():
                 f = tmp_path / f"bad_{name}.json"
@@ -273,28 +281,94 @@ def test_editor_full_flow(tmp_path):
                 "() => document.body.innerText.includes('status: cancelled')",
                 timeout=60000)
 
-            # gizmo drag -> single-step undo restores the pre-drag scene
-            scene_before = page2.evaluate(
-                "() => document.body.innerText.match(/arrows: 1/)[0]")
-            # click the arrow: it sits where we clicked to place it
+            # ---- gizmo drag evidence: move actually changes the arrow,
+            # undo restores EXACTLY, redo reproduces EXACTLY, save/reload
+            # keeps the final state (review fix #3)
+            def snap():
+                return page2.evaluate(
+                    "() => window.__sceneSnapshot()")
+
+            s_before = snap()
+            # click the arrow (it sits where placed) to attach the gizmo
             page2.mouse.click(cx, cy)
-            time.sleep(0.5)
-            # drag the gizmo translate handle (red X axis: right of center)
-            page2.mouse.move(cx + 46, cy)
+            time.sleep(0.6)
+            # drag from the gizmo center (plane/XYZ handle) -- reliably
+            # pickable; axis tips are too small for synthetic drags
+            page2.mouse.move(cx, cy)
             page2.mouse.down()
-            page2.mouse.move(cx + 160, cy, steps=12)
+            page2.mouse.move(cx + 114, cy + 38, steps=15)
             page2.mouse.up()
-            time.sleep(0.5)
-            moved = page2.evaluate(
-                "() => fetch('/api/render-sample-preview', {method:'POST',"
-                "headers:{'Content-Type':'application/json'},"
-                "body: JSON.stringify({scene: window.__lastScene, camera_id:'front'})}"
-                ").then(r => r.status)")
-            del moved, scene_before  # drag evidence via undo below
-            # whether or not the drag moved the arrow, undo must not corrupt
+            time.sleep(0.6)
+            s_dragged = snap()
+            a0 = s_before["arrows"][0]
+            a1 = s_dragged["arrows"][0]
+            moved = math.dist(a0["center_ego"][:2], a1["center_ego"][:2])
+            assert moved > 0.1, f"drag did not move the arrow ({moved:.3f} m)"
+
             page2.click("button[title='undo']")
+            time.sleep(0.4)
+            s_undo = snap()
+            assert s_undo == s_before, "undo did not restore pre-drag scene"
+
+            page2.click("button[title='redo']")
+            time.sleep(0.4)
+            s_redo = snap()
+            assert s_redo == s_dragged, "redo did not reproduce dragged scene"
+
+            # save the redone scene and reopen it in a fresh page: the arrow
+            # must keep the dragged position
+            with page2.expect_download() as dl2:
+                page2.click("button:has-text('save')")
+            p3 = pathlib.Path(dl2.value.path())
+            reopened = json.loads(p3.read_text())
+            assert math.dist(reopened["arrows"][0]["center_ego"][:2],
+                             a1["center_ego"][:2]) < 1e-9
+
+            # gizmo scale on an object: per-axis size change on disk after
+            # save/reopen, undo restores exactly
+            page3 = browser.new_page(viewport={"width": 1400, "height": 900})
+            page3.goto(f"{base}/index.html")
+            page3.wait_for_selector("text=arrow-toy")
+            page3.once("filechooser", lambda fc: fc.set_files(str(p3)))
+            page3.click("button:has-text('load')")
+            page3.wait_for_function(
+                "() => document.body.innerText.includes('loaded ')"
+                " || document.body.innerText.includes('invalid scene')"
+                " || document.body.innerText.includes('load failed')",
+                timeout=10000)
+            status_txt = page3.locator("div[style*='pointer-events']").first \
+                .inner_text() if page3.locator("div[style*='pointer-events']").count() else ""
+            assert "invalid" not in status_txt and "failed" not in status_txt, \
+                f"page3 load failed: {status_txt}"
+            snap3 = lambda: page3.evaluate(  # noqa: E731
+                "() => window.__sceneSnapshot()")
+            ob_before = snap3()["objects"][0]
+            size_before = list(ob_before["size_abc"])
+            # select the object (placed left-below the arrow), scale mode,
+            # drag the X scale handle outward
+            page3.mouse.click(cx - 200, cy + 80)
+            time.sleep(0.6)
+            page3.click("button:has-text('scale')")
             time.sleep(0.3)
-            assert _stats(page2)["arrows"] == 1
+            # X scale handle located at r=36px, 30 deg above horizontal
+            # (probe-verified on this gizmo size / camera)
+            hx = cx - 200 + 36 * math.cos(math.radians(30))
+            hy = cy + 80 - 36 * math.sin(math.radians(30))
+            page3.mouse.move(hx, hy)
+            page3.mouse.down()
+            page3.mouse.move(hx * 1 + 44, hy - 26, steps=15)
+            page3.mouse.up()
+            time.sleep(0.6)
+            ob_after = snap3()["objects"][0]
+            size_after = list(ob_after["size_abc"])
+            assert size_after[0] > size_before[0] * 1.05, \
+                f"scale drag did not grow x size: {size_before} -> {size_after}"
+            assert abs(size_after[1] - size_before[1]) < 1e-6
+            assert abs(size_after[2] - size_before[2]) < 1e-6
+            # undo restores the exact pre-scale scene
+            page3.click("button[title='undo']")
+            time.sleep(0.4)
+            assert snap3()["objects"][0]["size_abc"] == size_before
 
             assert not errors, errors
             browser.close()

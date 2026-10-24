@@ -55,6 +55,20 @@ def _validate_scene(scene: dict) -> None:
         jsonschema.validate(scene, SCENE_SCHEMA)
     except jsonschema.ValidationError as e:
         raise HTTPException(400, f"invalid scene: {e.message}")
+    # semantic checks mirrored from web/src/shared/validate.ts
+    seen = set()
+    for a in scene.get("arrows", []):
+        iid = a["instance_id"]
+        if iid in seen:
+            raise HTTPException(400, f"invalid scene: duplicate "
+                                     f"instance_id {iid}")
+        seen.add(iid)
+    for c in scene.get("cameras", []):
+        K = c["K"]
+        if not (K[0][0] > 0 and K[1][1] > 0):
+            raise HTTPException(400, "invalid scene: focal length <= 0")
+        if not (0 < c["near"] < c["far"]):
+            raise HTTPException(400, "invalid scene: need 0 < near < far")
 
 
 class RenderSampleRequest(BaseModel):

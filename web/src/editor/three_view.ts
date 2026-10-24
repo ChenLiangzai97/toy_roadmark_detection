@@ -144,6 +144,13 @@ export class ThreeViewport {
       return;
     }
     if (this.built) {
+      if (new URLSearchParams(location.search).has("debugpick")) {
+        // eslint-disable-next-line no-console
+        console.log("[pick] arrows:", this.raycaster.intersectObjects(this.built.arrowMeshes, false).length,
+          "objects:", this.raycaster.intersectObjects(this.built.objectGroup.children, true).length,
+          "ray:", this.raycaster.ray.origin.toArray().map((v) => Math.round(v)),
+          this.raycaster.ray.direction.toArray().map((v) => v.toFixed(2)));
+      }
       const arrowHits = this.raycaster.intersectObjects(this.built.arrowMeshes, false);
       if (arrowHits.length) {
         const id = (arrowHits[0].object.userData as { instance_id: number }).instance_id;
@@ -326,12 +333,13 @@ export class ThreeViewport {
     this.gizmo.setMode(mode);
   }
 
-  getProxyTransform(): { pos: [number, number, number]; rotZ: number; scale: number } | null {
+  getProxyTransform(): { pos: [number, number, number]; rotZ: number;
+                          scale: [number, number, number] } | null {
     if (!this.proxy) return null;
     return {
       pos: [this.proxy.position.x, this.proxy.position.y, this.proxy.position.z],
       rotZ: this.proxy.rotation.z,
-      scale: this.proxy.scale.x,
+      scale: [this.proxy.scale.x, this.proxy.scale.y, this.proxy.scale.z],
     };
   }
 
