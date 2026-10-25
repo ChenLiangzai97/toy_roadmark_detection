@@ -84,6 +84,16 @@ def to_pred_dict(probs, cls_, cns, Q=32):
             "dir_norm": dn}
 
 
+def _git_commit() -> str:
+    try:
+        import subprocess
+        out = subprocess.run(["git", "rev-parse", "HEAD"],
+                             capture_output=True, text=True)
+        return out.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/quick.yaml")
@@ -169,6 +179,8 @@ def main(argv=None) -> int:
         m.eval()
     scores = {"preds": []}
     thresholds = [0.5, 1.0]
+    n_eval = 0
+    eval_ids = []
     with torch.no_grad():
         for batch in val_ld:
             batch = {k: (v.to(device) if torch.is_tensor(v) else v)
@@ -181,24 +193,52 @@ def main(argv=None) -> int:
             dets = extract_detections(out["heatmap"].float(),
                                       out["offset"].float())
             for b, (probs, cls_, cns) in enumerate(dets):
+                n_eval += 1
+                eval_ids.append(batch["sample_ids"][b])
                 pred = to_pred_dict(probs, cls_, cns)
                 targets = {k: batch[k][b:b + 1] for k in
                            ("cls", "center", "dir", "mask",
                             "orientation_valid", "allow_no_object")}
                 match_and_score(pred, targets, thresholds, BEV_RANGE, scores)
     metrics = summarize(scores, thresholds)
-    metrics["note"] = ("dense head does not regress yaw; angle metrics "
-                       "are placeholders and excluded from comparison")
     wall = time.monotonic() - t0
+    torch.save({"backbone": backbone.state_dict(),
+                "bev_encoder": bev_enc.state_dict(),
+                "dense": dense.state_dict(), "step": step, "seed": seed},
+               run_dir / "last.pt")
+    with (run_dir / "predictions_val.jsonl").open("w") as f:
+        for pr in scores["preds"]:
+            f.write(json.dumps(pr) + "\n")
     result = {
-        "run": "ablation E (dense heatmap head, same BEV features)",
+        "run": "ablation E (dense heatmap head, same BEV ARCHITECTURE, "
+               "retrained from scratch)",
         "seed": seed, "params": params, "completed_steps": step,
         "wall_clock_s": round(wall, 2), "time_budget_s": budget,
         "time_budget_pass": bool(wall <= budget and status == "success"),
         "status": status, "metrics": metrics,
+        "eval_samples": n_eval,
+        "eval_sample_ids": eval_ids,
+        "config": cfg,
+        "git_commit": _git_commit(),
         "data_version": json.loads(
             (root / "cache" / "stats_train.json").read_text()
         ).get("data_version"),
+        "experimental_differences_vs_sparse": [
+            "backbone + BEV encoder are RE-INITIALIZED and retrained: the "
+            "architecture is shared, NOT the trained features",
+            "no yaw regression (angle metrics excluded from comparison)",
+            "focal heatmap + offset losses instead of Hungarian matching; "
+            "3x3 local-peak post-processing instead of query selection",
+            "supervision contract differs: heatmap negatives do NOT use "
+            "allow_no_object / ignore regions - cells over ignored arrows "
+            "still receive negative supervision (unlike the sparse runs)",
+        ],
+        "conclusion_scope": ("diagnostic only: on the current data the "
+                             "dense training recipe attains higher "
+                             "detection metrics; this supports further "
+                             "study of head/supervision/optimization "
+                             "differences and does NOT isolate the cause "
+                             "or prove feature quality"),
     }
     (run_dir / "result.json").write_text(json.dumps(result, indent=1))
     metrics_f.close()

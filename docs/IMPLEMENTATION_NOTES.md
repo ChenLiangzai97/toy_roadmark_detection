@@ -255,18 +255,28 @@ data_version a065b96fe99c9dbd, all runs budget-capped 600 s)
 
 ## Ablation E result (independent supplement, post-acceptance)
 
-- runs/dense_e_s42: dense heatmap + offset head on the SAME backbone +
-  BEV features, same data/seed/schedule/budget-cap. status
-  budget_incomplete (1391/1500 steps, 628.7 s; python-side heatmap
-  target building is slower per step - diagnostic runner, not part of
-  the accepted quick-mode pipeline). Eval on a 200-frame val subset,
-  same matcher/threshold policy; yaw not regressed (excluded).
-- RESULT: f1@0.5 0.986, mAP@0.5 0.997 (conf 0.2 selected).
-- Reading: with identical features and comparable budget the dense head
-  converges almost perfectly, while the sparse 32-query head reaches
-  only 0.29-0.45. This strongly supports the working hypothesis that
-  the accuracy gap is sparse-head/set-matching convergence at the fixed
-  step budget, NOT BEV feature quality. It does NOT change the
-  acceptance verdict (sparse-head targets remain unmet); it points the
-  next single-variable experiments at the head (denoising queries,
-  auxiliary dense supervision, more steps via lite profile).
+- runs/dense_e_s42 (re-run with full artifacts): dense heatmap + offset
+  head on the same backbone/BEV ARCHITECTURE, retrained from scratch;
+  same data/seed/schedule/budget-cap. status budget_incomplete
+  (1384/1500 steps, 627.8 s; python heatmap-target overhead - the
+  diagnostic runner is not performance-tuned). Eval on the FULL 600
+  sample val split (frame-accounted, ids in result.json), same
+  matcher/threshold policy. Artifacts: last.pt, predictions_val.jsonl,
+  eval_sample_ids, config, commit 2141162, data_version
+  a065b96fe99c9dbd.
+- RESULT: f1@0.5 0.9861, mAP@0.5 0.9973 (conf 0.2 selected on val).
+- SCOPE (review-corrected): this is NOT a single-variable experiment
+  and NOT a fair-comparison or accuracy-acceptance exhibit. Differences
+  vs the sparse baseline include (all listed in result.json):
+  backbone+BEV re-initialized/retrained (architecture shared, not the
+  trained features), no yaw task, focal+offset losses with 3x3 peak
+  post-processing instead of Hungarian matching, and a DIFFERENT
+  supervision contract (heatmap negatives ignore neither
+  allow_no_object nor ignore regions - cells over ignored arrows still
+  receive negative supervision).
+- CONCLUSION (deliberately limited): on the current data the dense
+  training recipe attains substantially higher detection metrics,
+  supporting further study of head/supervision/optimization
+  differences; feature-learning differences are NOT excluded. The
+  sparse-head-convergence reading stays a hypothesis, now with one
+  more consistent data point. Acceptance verdicts unchanged.
