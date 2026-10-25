@@ -28,9 +28,10 @@ from arrow_toy.data import generate as gen  # noqa: E402
 from arrow_toy.data.labels import decode_instance_ids  # noqa: E402
 from arrow_toy.geometry.bev import BevGrid  # noqa: E402
 
+from conftest import BROWSER, SKIP_REASON, browser_path
+
 DIST = REPO / "web" / "dist" / "render.html"
-CHROME = pathlib.Path.home() / ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome"
-HAVE = DIST.exists() and CHROME.exists()
+HAVE = DIST.exists() and BROWSER is not None
 
 
 def _scene_with(arrows: list[dict]) -> dict:
@@ -53,7 +54,7 @@ def _render(scenes: list[dict], tmp: pathlib.Path, passes=None):
     payload = json.dumps({"job_id": "t", "scenes": items,
                           "render_url": DIST.resolve().as_uri()})
     env = dict(os.environ)
-    env.setdefault("ARROW_CHROME_BIN", str(CHROME))
+    env.setdefault("ARROW_CHROME_BIN", str(browser_path()))
     p = subprocess.run(["npx", "tsx", "scripts/render_batch.ts"],
                        cwd=str(REPO / "web"), input=payload,
                        capture_output=True, text=True, env=env)

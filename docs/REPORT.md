@@ -84,12 +84,38 @@ python -m arrow_toy.benchmark --config configs/quick.yaml --output runs/benchmar
 python -m arrow_toy.train --config configs/quick.yaml --run-dir runs/baseline_s42
 python -m arrow_toy.train --config configs/quick.yaml --override configs/ablations/no_query_sa.yaml --run-dir runs/no_sa_s42
 
+# 最短评测链（只依赖上面已训练的 s42 两个 run）：
 python -m arrow_toy.evaluation.evaluate --run-dir runs/baseline_s42 --split val          # 阈值选择
 python -m arrow_toy.evaluation.evaluate --run-dir runs/baseline_s42 --split test_clean   # 冻结阈值
 python -m arrow_toy.evaluation.compare \
+    --runs runs/baseline_s42 runs/no_sa_s42 --output runs/comparison
+python -m arrow_toy.evaluation.visualize --run-dir runs/baseline_s42 --split val
+
+# 完整对比实验（生成主表其余 run 后再执行；每条都需 ~9.5 分钟训练 + 评测）：
+python3 - <<'PY'
+import yaml, pathlib
+for seed in (43, 44):
+    cfg = yaml.safe_load(open("configs/quick.yaml")); cfg["seed"] = seed
+    pathlib.Path("configs/experiments").mkdir(exist_ok=True)
+    yaml.safe_dump(cfg, open(f"configs/experiments/quick_s{seed}.yaml", "w"))
+cfg = yaml.safe_load(open("configs/quick.yaml")); cfg["train"]["lr"] = 0.0005
+yaml.safe_dump(cfg, open("configs/experiments/quick_lr5e4.yaml", "w"))
+PY
+for S in 43 44; do
+  python -m arrow_toy.train --config configs/experiments/quick_s$S.yaml --run-dir runs/baseline_s$S
+  python -m arrow_toy.train --config configs/experiments/quick_s$S.yaml \
+      --override configs/ablations/no_query_sa.yaml --run-dir runs/no_sa_s$S
+  for RUN in baseline_s$S no_sa_s$S; do
+    python -m arrow_toy.evaluation.evaluate --run-dir runs/$RUN --split val
+    python -m arrow_toy.evaluation.evaluate --run-dir runs/$RUN --split test_clean
+    python -m arrow_toy.evaluation.evaluate --run-dir runs/$RUN --split test_occlusion
+  done
+done
+python -m arrow_toy.train --config configs/experiments/quick_lr5e4.yaml --run-dir runs/lr5e4_s42
+python -m arrow_toy.evaluation.evaluate --run-dir runs/lr5e4_s42 --split val
+python -m arrow_toy.evaluation.compare \
     --runs runs/baseline_s42 runs/no_sa_s42 runs/baseline_s44 runs/no_sa_s44 \
            runs/baseline_s43 runs/no_sa_s43 runs/lr5e4_s42 --output runs/comparison
-python -m arrow_toy.evaluation.visualize --run-dir runs/baseline_s42 --split val
 ```
 
 产物位置：`data/arrow_v1/`（samples/splits/cache/audit.json/manifest.json）、`runs/<name>/`（resolved_config、environment（含 data_version 与 commit）、metrics.jsonl、result.json、last/best.pt、eval_*.json、predictions_*.jsonl、figures/）。

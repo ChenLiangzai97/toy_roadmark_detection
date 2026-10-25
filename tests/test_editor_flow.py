@@ -20,9 +20,11 @@ import numpy as np
 from PIL import Image
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
+from conftest import BROWSER, SKIP_REASON, browser_path
+
 DIST = REPO / "web" / "dist"
-CHROME = pathlib.Path.home() / ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome"
-HAVE = (DIST / "index.html").exists() and CHROME.exists()
+CHROME = browser_path()
+HAVE = (DIST / "index.html").exists() and BROWSER is not None
 
 
 def _stats(page) -> dict:
@@ -105,7 +107,7 @@ def test_editor_full_flow(tmp_path):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
-                headless=True, executable_path=str(CHROME))
+                headless=True, executable_path=str(browser_path()))
             page = browser.new_page(
                 viewport={"width": 1400, "height": 900},
                 accept_downloads=True)

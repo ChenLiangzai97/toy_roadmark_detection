@@ -27,9 +27,10 @@ from arrow_toy.data import generate as gen  # noqa: E402
 from arrow_toy.data.labels import build_labels, decode_instance_ids  # noqa: E402
 from arrow_toy.render import write_splits  # noqa: E402
 
+from conftest import BROWSER, browser_path
+
 DIST = REPO / "web" / "dist" / "render.html"
-CHROME = pathlib.Path.home() / ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome"
-HAVE_BROWSER = DIST.exists() and CHROME.exists()
+HAVE_BROWSER = DIST.exists() and BROWSER is not None
 
 
 def _base_scene(arrows: list[dict]) -> dict:
@@ -139,7 +140,7 @@ def test_occlusion_label_evidence(tmp_path):
     payload = json.dumps({"job_id": "occ", "scenes": items,
                           "render_url": DIST.resolve().as_uri()})
     env = dict(os.environ)
-    env.setdefault("ARROW_CHROME_BIN", str(CHROME))
+    env.setdefault("ARROW_CHROME_BIN", str(browser_path()))
     p = subprocess.run(["npx", "tsx", "scripts/render_batch.ts"],
                        cwd=str(REPO / "web"), input=payload,
                        capture_output=True, text=True, env=env)
