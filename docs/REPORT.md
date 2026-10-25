@@ -122,6 +122,6 @@ python -m arrow_toy.evaluation.compare \
 
 ## 后续建议
 
-1. 依据（未定证）：先跑完消融 E（同 BEV 特征 dense 头）——若 dense 头在同等预算下显著更好，则支持"sparse 头收敛是瓶颈"的假设，下一步做去噪 query/辅助监督的单变量实验；若 dense 同样不行，则瓶颈在特征，优先加深 backbone 或用 lite profile 换更多步数。
+1. 消融 E 已完成（独立补充，runs/dense_e_s42）：同 backbone/BEV 特征/种子/调度/预算上限下，dense heatmap+offset 头在 200 帧 val 子集上 f1@0.5=0.986、mAP=0.997（1391/1500 步，budget_incomplete 如实记录）。这有力支持"sparse 头/一对一匹配收敛是精度瓶颈"的工作假设（BEV 特征质量不是问题）。它不改变验收结论（sparse 头目标仍未达标），但明确了下一步单变量方向：去噪 query、辅助 dense 监督、或用 lite profile 换更多步数。
 2. 换正常 4080 复测墙钟，恢复设计中途验证节奏。
 3. 角误差不达标部分与位置精度耦合（中心 0.21–0.26 m）；提高位置精度（offset 回归或多尺度 BEV）可能同时改善两项。
