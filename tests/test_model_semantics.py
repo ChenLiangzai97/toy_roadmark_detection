@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import sys
 import pathlib
@@ -251,3 +252,56 @@ def test_excluded_queries_removed_from_all_counts():
                     excluded=excl)
     m = summarize(out, [0.5])
     assert m["precision@0.5"] == 1.0 and m["recall@0.5"] == 1.0
+
+
+def test_dataset_gate_strict(tmp_path):
+    """Missing stats file or missing data_version must REFUSE (review)."""
+    import shutil
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+    from arrow_toy.data.dataset import ArrowCacheDataset, check_dataset_gate
+    root = tmp_path / "ds"
+    (root / "cache").mkdir(parents=True)
+    gate = {"data_version": "abc123", "splits": {}}
+
+    def write_manifest(completed=True, audit_pass=True):
+        (root / "manifest.json").write_text(json.dumps(
+            {"completed": completed, "splits": {}}))
+        (root / "audit.json").write_text(json.dumps(
+            {"overall_pass": audit_pass}))
+
+    import hashlib
+    write_manifest()
+    h = hashlib.sha256((root / "manifest.json").read_bytes()
+                       + (root / "audit.json").read_bytes()).hexdigest()[:16]
+    # cache files present but stats missing -> refuse
+    for f in ("images_val.npy", "calib_val.npz", "targets_val.npz"):
+        (root / "cache" / f).write_bytes(b"x")
+    with pytest.raises(RuntimeError, match="stats.*missing|lacks"):
+        ArrowCacheDataset(root, "val", enforce_gate=True)
+    # stats present but no data_version -> refuse
+    (root / "cache" / "stats_val.json").write_text(json.dumps({"n": 1}))
+    with pytest.raises(RuntimeError, match="lacks data_version"):
+        ArrowCacheDataset(root, "val", enforce_gate=True)
+    # wrong version -> refuse
+    (root / "cache" / "stats_val.json").write_text(json.dumps(
+        {"data_version": "deadbeef"}))
+    with pytest.raises(RuntimeError, match="does not match"):
+        ArrowCacheDataset(root, "val", enforce_gate=True)
+    # matching version passes the gate (loading will fail on dummy files,
+    # which is fine - the gate itself must not raise)
+    (root / "cache" / "stats_val.json").write_text(json.dumps(
+        {"data_version": h}))
+    try:
+        ArrowCacheDataset(root, "val", enforce_gate=True)
+    except RuntimeError as e:
+        pytest.fail(f"gate rejected a valid version: {e}")
+    except Exception:
+        pass  # dummy cache content fails at load, not at the gate
+    # incomplete manifest / failed audit refuse even with valid cache
+    write_manifest(completed=False)
+    with pytest.raises(RuntimeError, match="completed=false"):
+        ArrowCacheDataset(root, "val", enforce_gate=True)
+    write_manifest(audit_pass=False)
+    with pytest.raises(RuntimeError, match="overall_pass=false"):
+        ArrowCacheDataset(root, "val", enforce_gate=True)

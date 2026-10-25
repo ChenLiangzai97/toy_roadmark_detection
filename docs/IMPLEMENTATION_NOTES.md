@@ -234,3 +234,20 @@ data_version a065b96fe99c9dbd, all runs budget-capped 600 s)
   (machinery learns), (b) oracle-BEV probe reaching only ~0.55 at 1200
   steps x batch 64, (c) B>A consistently. NOT a verified root cause; the
   designed next single-variable experiment is ablation E (dense head).
+
+
+## Final correction round (review: stale frozen thresholds, rounding, gate bypass, pair fairness)
+
+- evaluate CLI policy: VAL split selects fresh; other splits freeze from
+  eval_val.json (never from training-time result.json). Fresh val search
+  matches the reviewer's independent numbers (A/s42 conf 0.6 F1 0.2933,
+  B/s42 conf 0.8 F1 0.4262).
+- predictions_* now carry FULL float precision (rounding removed).
+- dataset gate strict: missing stats file OR missing data_version REFUSES
+  (regression test covers missing file / missing version / wrong version
+  / incomplete manifest / failed audit).
+- P6 fairness per design 10.4: the s43 pair is excluded from the
+  fixed-step main table (A/s43 truncated at 1369 steps) and reported as
+  diagnostic only. Main table = complete 1500-step pairs, seeds 42/44:
+  A 0.324+-0.044, B 0.439+-0.017. B wins every complete pair.
+- budget_incomplete runs are NOT counted as budget-passed.

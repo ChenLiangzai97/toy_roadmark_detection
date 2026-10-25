@@ -94,7 +94,8 @@ def focal_heatmap_loss(pred_logits: torch.Tensor,
 
 def offset_loss(pred_off: torch.Tensor, target_off: torch.Tensor,
                 cls_map: torch.Tensor) -> torch.Tensor:
-    mask = cls_map >= 0.99
+    # positives across ALL class channels for this cell
+    mask = (cls_map >= 0.99).any(dim=1, keepdim=True).expand_as(pred_off)
     if not mask.any():
         return pred_off.sum() * 0.0
     return F.l1_loss(pred_off[mask], target_off[mask])

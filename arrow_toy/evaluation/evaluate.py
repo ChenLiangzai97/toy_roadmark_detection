@@ -92,11 +92,24 @@ def main(argv=None) -> int:
     thresholds = cfg["eval"]["center_thresholds_m"]
     bev = cfg["model"]["bev_range_xy"]
 
-    res_path = run_dir / "result.json"
+    # threshold policy: VAL selects fresh (it is the selection set);
+    # any other split must freeze from the run's val evaluation and
+    # NEVER tune here (design 11.1)
     frozen = None
-    if res_path.exists():
-        frozen = json.loads(res_path.read_text()).get("metrics", {}).get(
-            "chosen_conf_threshold")
+    if args.split != cfg["dataset"]["val_split"]:
+        val_eval = run_dir / "eval_val.json"
+        if val_eval.exists():
+            frozen = json.loads(val_eval.read_text())["metrics"].get(
+                "chosen_conf_threshold")
+        else:
+            res_path = run_dir / "result.json"
+            if res_path.exists():
+                frozen = json.loads(res_path.read_text()).get(
+                    "metrics", {}).get("chosen_conf_threshold")
+        if frozen is None:
+            raise RuntimeError(
+                "no val-selected confidence threshold available; evaluate "
+                "the val split first")
     scores = {"preds": []}
     with torch.no_grad():
         for batch in loader:

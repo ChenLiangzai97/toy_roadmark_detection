@@ -42,14 +42,21 @@ class ArrowCacheDataset(Dataset):
         if enforce_gate:
             gate = check_dataset_gate(self.root)
             stats_p = self.root / "cache" / f"stats_{split}.json"
-            if stats_p.exists():
-                import json as _json
-                cached = _json.loads(stats_p.read_text()).get("data_version")
-                if cached is not None and cached != gate["data_version"]:
-                    raise RuntimeError(
-                        f"cache for '{split}' (version {cached}) does not "
-                        f"match dataset version {gate['data_version']}; "
-                        "rerun prepare_cache")
+            if not stats_p.exists():
+                raise RuntimeError(
+                    f"cache stats for '{split}' missing (no data_version "
+                    "binding); rerun prepare_cache")
+            import json as _json
+            cached = _json.loads(stats_p.read_text()).get("data_version")
+            if not cached:
+                raise RuntimeError(
+                    f"cache stats for '{split}' lacks data_version; "
+                    "rerun prepare_cache")
+            if cached != gate["data_version"]:
+                raise RuntimeError(
+                    f"cache for '{split}' (version {cached}) does not "
+                    f"match dataset version {gate['data_version']}; "
+                    "rerun prepare_cache")
         cache = self.root / "cache"
         self.images = np.load(cache / f"images_{split}.npy", mmap_mode="r")
         calib = np.load(cache / f"calib_{split}.npz")

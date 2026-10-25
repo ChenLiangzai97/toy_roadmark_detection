@@ -127,12 +127,10 @@ def match_and_score(pred: dict, targets: dict, thresholds_m: list[float],
         out["empty_n"] = out.get("empty_n", 0) + (1 if n_gt == 0 else 0)
         out["preds"].append({
             "sample": sample_ids[b] if sample_ids else None,
-            "probs": [round(float(v), 4) for v in best_prob[b]],
+            "probs": [float(v) for v in best_prob[b]],
             "cls": [int(c) for c in best_cls[b]],
-            "center_norm": [[round(float(x), 4), round(float(y), 4)]
-                            for x, y in centers[b]],
-            "dir": [[round(float(x), 4), round(float(y), 4)]
-                    for x, y in dir_norm[b]],
+            "center_norm": [[float(x), float(y)] for x, y in centers[b]],
+            "dir": [[float(x), float(y)] for x, y in dir_norm[b]],
         })
 
 

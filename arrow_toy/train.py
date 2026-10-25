@@ -156,7 +156,11 @@ def main(argv=None) -> int:
                                "prepare_cache first")
         stats = json.loads(stats_p.read_text())
         cached_v = stats.get("data_version")
-        if cached_v is not None and cached_v != gate["data_version"]:
+        if not cached_v:
+            raise RuntimeError(
+                f"cache stats for '{sp}' lacks data_version; rerun "
+                "prepare_cache")
+        if cached_v != gate["data_version"]:
             raise RuntimeError(
                 f"cache for '{sp}' was built against data_version "
                 f"{cached_v} but the dataset is now {gate['data_version']}; "
