@@ -211,7 +211,8 @@ def main(argv=None) -> int:
                            ("cls", "center", "dir", "mask",
                             "orientation_valid", "allow_no_object")}
                 match_and_score(pred, targets, thresholds, BEV_RANGE,
-                                scores, sample_ids=batch["sample_ids"])
+                                scores,
+                                sample_ids=[batch["sample_ids"][b]])
     metrics = summarize(scores, thresholds)
     wall = time.monotonic() - t0
     torch.save({"backbone": backbone.state_dict(),
