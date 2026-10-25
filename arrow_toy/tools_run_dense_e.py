@@ -99,6 +99,9 @@ def main(argv=None) -> int:
     ap.add_argument("--config", default="configs/quick.yaml")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--steps", type=int, default=1500)
+    ap.add_argument("--eval-only", action="store_true",
+                    help="load last.pt and rerun evaluation only "
+                         "(regenerates predictions with sample ids)")
     args = ap.parse_args(argv)
     cfg = load_yaml(args.config)
     run_dir = pathlib.Path(args.run_dir)
@@ -132,6 +135,14 @@ def main(argv=None) -> int:
     step = 0
     stop = False
     status = "success"
+    if args.eval_only:
+        ck = torch.load(run_dir / "last.pt", map_location=device,
+                        weights_only=True)
+        backbone.load_state_dict(ck["backbone"])
+        bev_enc.load_state_dict(ck["bev_encoder"])
+        dense.load_state_dict(ck["dense"])
+        step = ck["step"]
+        stop = True
     budget = cfg["train"]["time_budget_s"]
     reserve = cfg["train"]["reserve_finalization_s"]
     metrics_f = (run_dir / "metrics.jsonl").open("w")
@@ -199,7 +210,8 @@ def main(argv=None) -> int:
                 targets = {k: batch[k][b:b + 1] for k in
                            ("cls", "center", "dir", "mask",
                             "orientation_valid", "allow_no_object")}
-                match_and_score(pred, targets, thresholds, BEV_RANGE, scores)
+                match_and_score(pred, targets, thresholds, BEV_RANGE,
+                                scores, sample_ids=batch["sample_ids"])
     metrics = summarize(scores, thresholds)
     wall = time.monotonic() - t0
     torch.save({"backbone": backbone.state_dict(),
