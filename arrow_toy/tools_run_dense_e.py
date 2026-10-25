@@ -79,7 +79,7 @@ def to_pred_dict(probs, cls_, cns, Q=32):
         fg[0, k, cls_[i]] = probs[i]
         bc[0, k] = cls_[i]
         cn[0, k] = torch.tensor(cns[i])
-        dn[0, k] = 1.0, 0.0  # dense head does not regress yaw
+        dn[0, k] = torch.tensor([1.0, 0.0])  # no yaw regression
     return {"probs_fg": fg, "best_cls": bc, "pred_center_norm": cn,
             "dir_norm": dn}
 
