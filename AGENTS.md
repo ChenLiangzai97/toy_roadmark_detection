@@ -47,8 +47,10 @@ design doc for full contracts; this file is the map.
 
 ## Known open items (2026-10)
 
-- Quick-mode accuracy targets unmet at fixed 1500-step budget; oracle
-  diagnostic attributes it to sparse-head convergence (see notes). Next
-  single-variable experiment per design: ablation E dense head run.
-- mAP@0.5 AP-based metric reported via f1/precision/recall so far; AP
-  101-point interpolation not yet wired into the compare table.
+- Quick-mode accuracy targets unmet at fixed 1500-step budget. WORKING
+  HYPOTHESIS (not proven): sparse-head/matching convergence - evidence
+  in docs/REPORT.md (overfit fit, oracle probe, consistent no-SA win).
+  Next single-variable experiment per design: ablation E dense head.
+- Per-class AP/mAP (101-point), macro-F1 and 11.2 ignore-region
+  suppression ARE implemented (arrow_toy/evaluation/metrics.py,
+  evaluate CLI); keep their regression tests green when touching them.

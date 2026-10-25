@@ -1,6 +1,7 @@
 # 实现与验证报告
 
 - 实现 commit：12da307（基准：7710335 = 空仓库设计文档）
+- 从零安装验证：全新 venv（torch 2.5.1+cu121 wheel + `pip install -e .[dev]`）安装、40/40 测试、CLI dry-run 与上述 P4 复现链全部通过（依赖清单见 pyproject.toml：运行含 jsonschema，dev 含 playwright）。
 - 环境与 GPU：RTX 4080 16 GB（本机实测性能约为正常水平 1/5–1/10，见下）、驱动 535.288.01、torch 2.5.1+cu121、Python 3.11.5、Node 24、Chrome for Testing 156；前端/依赖版本锁定于 web/package-lock.json 与 docs/IMPLEMENTATION_NOTES.md
 - 数据版本/哈希及 split：data/arrow_v1，data_version `a065b96fe99c9dbd`（sha256(manifest+audit) 前 16 位）；overfit 48 / train 6040（含 40 类别对照）/ val 600 / test_clean 600 / test_occlusion 200 / test_pose 200 / stress 8；audit 通过（无泄漏、0 不变式违反、完整性检查 0 问题）
 - 生效配置：各 run 目录 `resolved_config.yaml|json`
@@ -15,7 +16,7 @@
 | P1 最小生成 | 通过 | tests/test_render_semantics.py（BEV 方向/镜像/对齐）、test_generation_contract.py（无/部分/完全遮挡标签证据） |
 | P2 编辑器 | 通过 | tests/test_editor_flow.py（放置/撤销重做/相机/保存重开一致/非法导入拒绝/预览逐像素=离线渲染/9样本跨块任务/取消）、test_api_validation.py（三入口同步 400） |
 | P3 数据 | 通过 | 7648 样本零错误渲染；audit.json 全过（含完整性抽样复核）；cache 1.4 GB（版本绑定） |
-| P4 模型 | 通过 | runs/overfit32_v2：32 场景 1000 步 54.4 s，f1 0.984 / mAP 1.000 / 中心 0.021 m / 角 0.52°；8+ 语义测试 |
+| P4 模型 | 通过 | runs/overfit32_v2：32 场景 1000 步 54.4 s，f1 0.984 / mAP 1.000 / 中心 0.021 m / 角 0.52°；全新 venv 按本文命令复现 runs/overfit32_verify：f1 1.000 / mAP 1.000 / 中心 0.020 m / 角 0.64°（差异来自 cudnn autotune 非确定性，同过门槛）；8+ 语义测试 |
 | P5 快模式 | 部分通过 | 时间/显存实测达标；精度目标未达标（见下） |
 | P6 对比 | 两种子受控对比成立 | runs/comparison/comparison.md（主表=完整 1500 步配对） |
 | P7 交接 | 本报告 + README + AGENTS.md + IMPLEMENTATION_NOTES.md | 见"复现命令" |
@@ -54,12 +55,14 @@
 2. 本机 RTX 4080 实测降速 ~5–10×（4096³ bf16 matmul 9.1 ms，正常 ~2 ms；nvidia-smi 报 ERR/not-ready）。影响墙钟余量与中途验证次数，不影响固定步数可比性；换正常 GPU 时步时延余量可恢复。
 3. 遮挡集 40/200 帧遮挡物未命中目标（生成几何近似所致），标签如实描述渲染结果；如需更高命中率需改进遮挡物放置算法。
 4. 位置覆盖 12/32 粗格（车道式布局所致），类别与位置已解耦（类别均衡按实例）。
-5. mAP 的 ignore 抑制后重算、多相机训练、车道转向任务：未实现（设计明确保留）。
+5. 多相机训练融合、车道转向任务、掉头类箭头：未实现（设计明确保留给后续版本）。
+   注：mAP/宏F1（101 点 AP）与 11.2 忽略区抑制均已实现并有回归测试。
 
 ## 复现命令
 
 ```bash
 # 安装（torch 用 cu121 wheel；本机验证 2.5.1+cu121）
+pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 pip install -e .[dev]
 npm --prefix web ci
 # 浏览器：npx --prefix web playwright install chromium 或设 ARROW_CHROME_BIN
@@ -72,14 +75,20 @@ python -m arrow_toy.render --config configs/data_v1.yaml          # 生成 ~11 m
 python -m arrow_toy.data.audit --root data/arrow_v1               # 审计（置 completed）
 python -m arrow_toy.data.prepare_cache --root data/arrow_v1       # 缓存（版本绑定）
 
-python -m arrow_toy.train --config configs/overfit.yaml --run-dir runs/overfit   # P4 门槛
+# P4 门槛（32 场景子集，与 runs/overfit32_v2 对应）：
+head -32 data/arrow_v1/splits/overfit.txt > data/arrow_v1/splits/overfit32.txt
+python3 -c "from arrow_toy.data.prepare_cache import build_cache; import pathlib; \
+build_cache(pathlib.Path('data/arrow_v1'), 'overfit32')"
+python -m arrow_toy.train --config configs/overfit32.yaml --run-dir runs/overfit32_v2
 python -m arrow_toy.benchmark --config configs/quick.yaml --output runs/benchmark.json
 python -m arrow_toy.train --config configs/quick.yaml --run-dir runs/baseline_s42
 python -m arrow_toy.train --config configs/quick.yaml --override configs/ablations/no_query_sa.yaml --run-dir runs/no_sa_s42
 
 python -m arrow_toy.evaluation.evaluate --run-dir runs/baseline_s42 --split val          # 阈值选择
 python -m arrow_toy.evaluation.evaluate --run-dir runs/baseline_s42 --split test_clean   # 冻结阈值
-python -m arrow_toy.evaluation.compare --runs runs/baseline_s42 runs/no_sa_s42 ... --output runs/comparison
+python -m arrow_toy.evaluation.compare \
+    --runs runs/baseline_s42 runs/no_sa_s42 runs/baseline_s44 runs/no_sa_s44 \
+           runs/baseline_s43 runs/no_sa_s43 runs/lr5e4_s42 --output runs/comparison
 python -m arrow_toy.evaluation.visualize --run-dir runs/baseline_s42 --split val
 ```
 

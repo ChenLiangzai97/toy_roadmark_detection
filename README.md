@@ -14,9 +14,13 @@
 
 ```bash
 # 0) 环境：Python 3.11、Node 22+；GPU 可选（CUDA 12.x + 驱动 530+）
-pip install -e .[dev]                     # torch 需另装（cu121 wheel 验证过）
-npm --prefix web ci                       # 安装前端依赖（锁定在 lockfile）
-npx --prefix web playwright install chromium || true   # 或设 ARROW_CHROME_BIN
+# torch 单独安装（本仓库验证过 cu121 wheel；CPU-only 可装 torch==2.5.1）
+pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -e .[dev]                     # 运行+测试依赖（含 jsonschema/playwright）
+npm --prefix web ci                       # 前端依赖（锁定在 package-lock.json）
+# 浏览器二选一（缺一会在浏览器集成测试处明确失败，不会静默跳过）：
+npx --prefix web playwright install chromium
+#   或已有 Chrome for Testing：export ARROW_CHROME_BIN=/path/to/chrome
 
 # 1) 构建 + 启动编辑器（http://127.0.0.1:8765）
 npm --prefix web run build
@@ -72,8 +76,10 @@ python -m arrow_toy.evaluation.visualize --run-dir runs/baseline_s42 --split val
 - 时间/显存达标（≤600 s、1.12 GB）；**精度目标（f1≥0.85、mAP≥0.75、角≤10°）未达标**；
   中心误差 0.21–0.26 m（≤0.35 达标）、空帧误报 ≤0.054（≤0.10 达标）。budget_incomplete
   的 run 不计为预算通过。
-- oracle 诊断表明瓶颈在 sparse 头 + 一对一匹配的收敛速度（1500 步 ≈ 8 epoch
-  不足以让 DETR 式头收敛），不是 BEV 特征质量。
+- 精度瓶颈的工作假设（未定证）：sparse 头 + 一对一匹配在固定 1500 步
+  预算下收敛不足。支持证据：overfit 1000 步即 0.984；oracle-BEV 探针
+  （真值直接写入 token）1200 步也仅 ~0.55；关 SA 每个完整配对都更好。
+  消融 E（dense 头，同 BEV 特征）为设计的下一步单变量验证。
 - 本机 RTX 4080 实测性能仅为正常水平的 ~1/5–1/10（驱动报 ERR/not-ready），
   已在文档中记录；这影响墙钟余量但不影响固定步数的可比性。
 

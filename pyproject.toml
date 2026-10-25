@@ -11,10 +11,15 @@ dependencies = [
   "fastapi",
   "uvicorn",
   "pydantic",
+  "jsonschema>=4",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "matplotlib"]
+dev = [
+  "pytest",
+  "matplotlib",
+  "playwright>=1.64",       # used by tests/test_editor_flow.py
+]
 
 [build-system]
 requires = ["setuptools>=61"]
