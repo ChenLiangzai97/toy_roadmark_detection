@@ -6,6 +6,7 @@
 
 - [完整开发设计书](docs/ARROW_TOY_DESIGN.md)
 - [实现决策与差异记录](docs/IMPLEMENTATION_NOTES.md)
+- [实现与验证报告](docs/REPORT.md)（最终结论/复现/失败限制）
 - 目标链路：单帧图像 → Tiny CNN → 地面几何投影与 BEV 特征 → 32-query decoder → 类型、中心、朝向。
 - 被遮挡箭头忽略监督，并处理未匹配 query 的背景忽略。
 

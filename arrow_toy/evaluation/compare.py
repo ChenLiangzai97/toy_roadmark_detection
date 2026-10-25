@@ -71,16 +71,52 @@ def main(argv=None) -> int:
     out_dir = pathlib.Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "comparison.json").write_text(json.dumps(rows, indent=1))
-    # markdown table
+
     cols = ["run", "seed", "params", "self_attention", "completed_steps",
             "f1@0.5", "map@0.5", "macro_f1@0.5", "chosen_conf",
             "test_clean_f1@0.5", "test_occlusion_f1@0.5",
             "center_err_m@0.5", "ang_err_deg@0.5",
             "empty_frame_fp", "wall_clock_s", "peak_mem_gb", "status"]
-    lines = ["| " + " | ".join(cols) + " |",
-             "|" + "---|" * len(cols)]
-    for row in rows:
-        lines.append("| " + " | ".join(str(row.get(c)) for c in cols) + " |")
+
+    def md_table(rs):
+        lines = ["| " + " | ".join(cols) + " |",
+                 "|" + "---|" * len(cols)]
+        for row in rs:
+            lines.append("| " + " | ".join(str(row.get(c)) for c in cols)
+                         + " |")
+        return lines
+
+    # fair fixed-step pairing: main table = completed 1500-step runs in
+    # complete A/B seed pairs; everything else is diagnostic (design 10.4)
+    import statistics
+    main_rows, diag_rows = [], []
+    complete = {r["run"]: r for r in rows
+                if r["completed_steps"] == 1500 and r["status"] == "success"}
+    seeds = sorted({r["seed"] for r in complete.values()})
+    for sd in seeds:
+        a = complete.get(f"baseline_s{sd}")
+        b = complete.get(f"no_sa_s{sd}")
+        if a and b:
+            main_rows.extend([a, b])
+    main_names = {r["run"] for r in main_rows}
+    diag_rows = [r for r in rows if r["run"] not in main_names]
+
+    lines = ["# A/B comparison", "",
+             "## Main table (complete 1500-step A/B pairs only)"]
+    lines += md_table(main_rows)
+    for grp, name in (("baseline", "A (self-attention ON)"),
+                      ("no_sa", "B (self-attention OFF)")):
+        f1s = [r["f1@0.5"] for r in main_rows
+               if r["run"].startswith(grp)]
+        if len(f1s) >= 2:
+            lines += ["",
+                      f"{name}: mean f1@0.5 = {statistics.mean(f1s):.4f} "
+                      f"+- {statistics.stdev(f1s):.4f} (n={len(f1s)})"]
+        elif f1s:
+            lines += ["", f"{name}: f1@0.5 = {f1s[0]} (n=1)"]
+    lines += ["", "## Diagnostic table (truncated / variant runs - NOT "
+              "eligible for fixed-step structure conclusions)"]
+    lines += md_table(diag_rows)
     (out_dir / "comparison.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     return 0
