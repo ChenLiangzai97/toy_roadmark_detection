@@ -172,9 +172,10 @@ function ArrowThumb({ classId, size = 44 }: { classId: number; size?: number }) 
     for (const prim of t.primitives) {
       ctx.beginPath();
       prim.points_ab.forEach(([a, b], i) => {
-        // template +a is the entry/forward direction -> draw it UP
-        const px = ox + a * sc;
-        const py = oy - b * sc;
+        // display convention: entry/forward (+a) points UP, left branch
+        // (+b) points LEFT -> px = -b, py = -a
+        const px = ox - b * sc;
+        const py = oy - a * sc;
         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       });
       ctx.closePath();
@@ -1044,7 +1045,7 @@ function App() {
       <div style={{ gridArea: "dock", display: "flex", gap: 8, padding: "6px 8px",
                     borderTop: "1px solid #2a2f36", background: "#171b1f",
                     overflow: "hidden" }}>
-        <div style={{ flex: "0 0 auto", width: 396 }}>
+        <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", maxWidth: "45%" }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
             <b style={{ fontSize: 12 }}>相机预览</b>
             <select value={previewCam} onChange={(e) => setPreviewCam(parseInt(e.target.value))}>
@@ -1060,8 +1061,9 @@ function App() {
           <div
             ref={previewWrap}
             data-testid="preview-box"
-            style={{ position: "relative", width: 392, height: 235 - 46,
-                     overflow: "hidden", border: "1px solid #333",
+            style={{ position: "relative", display: "inline-block",
+                     height: 184, overflow: "hidden",
+                     border: "1px solid #333",
                      cursor: zoom > 1 ? "grab" : "default" }}
             onPointerDown={(e) => {
               if (zoom <= 1) { lookDrag(e); return; }
@@ -1081,7 +1083,7 @@ function App() {
             title="拖拽: 1x 转向相机 / 放大后平移; 滚轮: 缩放"
           >
             <canvas ref={previewCanvas} data-testid="preview-canvas" style={{
-              width: "100%", height: "100%", display: "block",
+              height: "100%", width: "auto", display: "block",
               imageRendering: "pixelated",
               transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
               transformOrigin: "0 0",
@@ -1094,10 +1096,13 @@ function App() {
             />
           )}
         </div>
-        {showBevLayer && <div style={{ flex: "0 0 auto" }}>
-          <div style={{ fontSize: 11, color: "#9ab", marginBottom: 4 }}>BEV 实例层 (上=远, 左=左)</div>
-          <canvas ref={bevCanvas} style={{ width: 196, height: 392, transform: "rotate(-90deg) translateY(-100%)",
-            transformOrigin: "top right", border: "1px solid #333", imageRendering: "pixelated" }} />
+        {showBevLayer && <div style={{ flex: "0 0 auto", display: "flex",
+                                       flexDirection: "column", paddingLeft: 8,
+                                       borderLeft: "1px solid #2a2f36" }}>
+          <div style={{ fontSize: 11, color: "#9ab", marginBottom: 4 }}>BEV (上=远, 左=左)</div>
+          <canvas ref={bevCanvas} data-testid="bev-canvas" style={{
+            height: 184, width: "auto", display: "block",
+            imageRendering: "pixelated", border: "1px solid #333" }} />
         </div>}
         <div style={{ marginLeft: "auto", alignSelf: "end", fontSize: 11, color: "#667" }}>
           stats: arrows {scene.arrows.length} · objects {scene.objects.length} · lines {scene.lane_lines.length} · lanes {scene.lanes.length} · cameras {scene.cameras.length}
