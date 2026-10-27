@@ -146,3 +146,36 @@ def test_threejs_vs_python_projection():
             for a, b in zip(uv_py, out["uv"])
         ]
         assert max(errs) <= 0.5, f"{cam['name']}: max err {max(errs):.4f}px"
+
+
+def test_camera_yaw_pitch_world_frame():
+    """World-frame yaw/pitch contract (review): the optical axis (row 2
+    of R_C_E) must rotate in the world X-Y plane with yaw, and the
+    default pose must match the design-doc R exactly at yaw=0."""
+    from arrow_toy.data.generate import _T_C_E_with_yaw
+    alpha = math.radians(12)
+    pos = [0.3, -0.2, 1.7]
+    T0 = _T_C_E_with_yaw(alpha, 0.0, pos)
+    T1 = _T_C_E_with_yaw(alpha, 0.6, pos)
+    # design-doc default rows at yaw=0
+    assert T0[0][:3] == pytest.approx([0, -1, 0])
+    assert T0[1][:3] == pytest.approx(
+        [-math.sin(alpha), 0, -math.cos(alpha)])
+    assert T0[2][:3] == pytest.approx(
+        [math.cos(alpha), 0, -math.sin(alpha)])
+    # optical axes must DIFFER between yaw 0 and 0.6 (the old Rz@R0
+    # composition left them identical - a camera-frame roll)
+    f0 = T0[2][:3]
+    f1 = T1[2][:3]
+    assert f0 != pytest.approx(f1), "yaw did not change the optical axis"
+    # forward stays at the same elevation; heading rotates by 0.6
+    assert math.asin(-f1[2]) == pytest.approx(alpha)
+    assert math.atan2(f1[1], f1[0]) == pytest.approx(0.6)
+    # round trip: extraction is the inverse of construction
+    def pose_of(T):
+        return math.atan2(T[2][1], T[2][0]), math.asin(-T[2][2])
+    for yaw in (-0.7, -0.1, 0.0, 0.35, 1.9, math.pi - 0.01):
+        T = _T_C_E_with_yaw(alpha, yaw, pos)
+        y2, a2 = pose_of(T)
+        assert y2 == pytest.approx(yaw, abs=1e-12)
+        assert a2 == pytest.approx(alpha, abs=1e-12)

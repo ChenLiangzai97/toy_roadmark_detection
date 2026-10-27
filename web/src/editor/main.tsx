@@ -408,10 +408,11 @@ function App() {
     if (zoom > 1) return; // zoomed: pointer drag pans instead
     const cal = scene.cameras[previewCam];
     if (!cal) return;
+    const pose0 = cameraPoseFromT(cal.T_C_E);
     lookRef.current = {
       x: e.clientX, y: e.clientY,
-      yaw: Math.atan2(-cal.T_C_E[0][1], cal.T_C_E[0][0]),
-      pitch: -Math.asin(-cal.T_C_E[1][0]),
+      yaw: pose0.yaw,
+      pitch: pose0.pitchDown,
       pushed: false,
     };
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -662,9 +663,9 @@ function App() {
           <NumField label="pos x" value={cameraPos(cal)[0]} onChange={(v) => patchCamera(cal.camera_id, { pos: [v, cameraPos(cal)[1], cameraPos(cal)[2]] })} />
           <NumField label="pos y" value={cameraPos(cal)[1]} onChange={(v) => patchCamera(cal.camera_id, { pos: [cameraPos(cal)[0], v, cameraPos(cal)[2]] })} />
           <NumField label="pos z (height)" value={cameraPos(cal)[2]} onChange={(v) => patchCamera(cal.camera_id, { pos: [cameraPos(cal)[0], cameraPos(cal)[1], v] })} />
-          <NumField label="pitch down (deg)" value={(-Math.asin(-cal.T_C_E[1][0]) * 180) / Math.PI} step={1}
+          <NumField label="pitch down (deg)" value={(cameraPoseFromT(cal.T_C_E).pitchDown * 180) / Math.PI} step={1}
             onChange={(v) => patchCamera(cal.camera_id, { pitchDeg: v })} />
-          <NumField label="yaw (deg)" value={(Math.atan2(-cal.T_C_E[0][1], cal.T_C_E[0][0]) * 180) / Math.PI} step={1}
+          <NumField label="yaw (deg)" value={(cameraPoseFromT(cal.T_C_E).yaw * 180) / Math.PI} step={1}
             onChange={(v) => patchCamera(cal.camera_id, { yawDeg: v })} />
           <NumField label="width px" value={cal.width} step={1} onChange={(v) => patchCamera(cal.camera_id, { width: Math.round(v) })} />
           <NumField label="height px" value={cal.height} step={1} onChange={(v) => patchCamera(cal.camera_id, { height: Math.round(v) })} />
@@ -725,8 +726,9 @@ function App() {
       const cal = next.cameras.find((c) => c.camera_id === cameraId)!;
       const cur = cameraPos(cal);
       const pos = patch.pos ?? cur;
-      const pitchDeg = patch.pitchDeg ?? (-Math.asin(-cal.T_C_E[1][0]) * 180) / Math.PI;
-      const yawDeg = patch.yawDeg ?? (Math.atan2(-cal.T_C_E[0][1], cal.T_C_E[0][0]) * 180) / Math.PI;
+      const pose0 = cameraPoseFromT(cal.T_C_E);
+      const pitchDeg = patch.pitchDeg ?? (pose0.pitchDown * 180) / Math.PI;
+      const yawDeg = patch.yawDeg ?? (pose0.yaw * 180) / Math.PI;
       const width = patch.width ?? cal.width;
       const height = patch.height ?? cal.height;
       const fovDeg = patch.fovDeg ?? (2 * Math.atan2(cal.height / 2, cal.K[1][1]) * 180) / Math.PI;
@@ -990,15 +992,31 @@ function cameraPos(cal: CameraCalibration): [number, number, number] {
 
 function tceFromPitchYaw(pitchDown: number, yaw: number,
                          pos: [number, number, number]): number[][] {
-  // build T_C_E = [Rz(yaw) @ R0 | -R t]
-  const s = Math.sin(pitchDown), c = Math.cos(pitchDown);
-  const R0 = [[0, -1, 0], [-s, 0, -c], [c, 0, -s]];
+  // WORLD-frame yaw/pitch: the optical axis (row 2 of R) points along
+  // (cos a cos y, cos a sin y, -sin a) in ego coords. Rows are the
+  // camera axes in ego (right / down / forward); yaw rotates the
+  // heading in the world X-Y plane, pitchDown tilts it below horizon.
+  // (A previous version composed Rz @ R0 which rotated in the CAMERA
+  // frame - a roll that left the optical axis unchanged.)
+  const sa = Math.sin(pitchDown), ca = Math.cos(pitchDown);
   const sy = Math.sin(yaw), cy = Math.cos(yaw);
-  const Rz = [[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]];
-  const R = [0, 1, 2].map((i) =>
-    [0, 1, 2].map((j) => Rz[i][0] * R0[0][j] + Rz[i][1] * R0[1][j] + Rz[i][2] * R0[2][j]));
-  const t = [0, 1, 2].map((i) => -(R[i][0] * pos[0] + R[i][1] * pos[1] + R[i][2] * pos[2]));
+  const R = [
+    [sy, -cy, 0],                    // camera right in ego
+    [-sa * cy, -sa * sy, -ca],       // camera down in ego
+    [ca * cy, ca * sy, -sa],         // camera forward (optical axis)
+  ];
+  const t = [0, 1, 2].map((i) =>
+    -(R[i][0] * pos[0] + R[i][1] * pos[1] + R[i][2] * pos[2]));
   return [...R.map((r, i) => [...r, t[i]]), [0, 0, 0, 1]];
+}
+
+/** Extract world-frame yaw/pitch from T_C_E (inverse of the above). */
+function cameraPoseFromT(T: number[][]): { yaw: number; pitchDown: number } {
+  const fx = T[2][0], fy = T[2][1], fz = T[2][2];
+  return {
+    yaw: Math.atan2(fy, fx),
+    pitchDown: Math.asin(-fz),
+  };
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

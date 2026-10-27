@@ -310,3 +310,30 @@ data_version a065b96fe99c9dbd, all runs budget-capped 600 s)
   Python-side heatmap-target construction doubles step time. f1 0.246 at
   867 steps is NOT comparable to the 1500-step baselines. Needs GPU-
   vectorized target building before a fair run; recorded as open.
+
+
+## Camera pose math fix (review-caught, both TS and Python)
+
+- tceFromPitchYaw / _T_C_E_with_yaw previously composed Rz @ R0, which
+  rotates in the CAMERA frame (a roll): the optical axis was IDENTICAL
+  for all yaw values. Now the rows of R are the camera axes in EGO with
+  the optical axis (row 2) = (cos a cos y, cos a sin y, -sin a); yaw
+  rotates the heading in the world X-Y plane. The yaw=0 pose still
+  matches the design-doc R exactly.
+- Extraction (cameraPoseFromT) is the exact inverse (yaw=atan2(f_y,f_x),
+  pitch=asin(-f_z)); the look-drag previously mis-read yaw=0 as 90 deg
+  and jumped on the first move - fixed and covered by a continuity test
+  (10 px drag -> ~0.03 rad delta).
+- Tests: Python unit test asserts optical-axis variation with yaw,
+  default-row equality and round-trip inversion; UI test asserts small-
+  drag continuity (no jump), world-frame heading change, K/position
+  invariance, save/reload equality.
+- DATA IMPACT: the generator had the same bug, so the PREVIOUS
+  test_pose split's "+-10 deg yaw" perturbation was actually camera
+  ROLL. test_pose regenerated with true world yaw (deterministic seeds,
+  200 samples re-rendered), manifest splits restored, audit re-passed,
+  caches rebuilt -> data_version now 56384bb9427e5a1c. Earlier run
+  artifacts keep their recorded versions (a065b96...); re-evaluating
+  them against the new data version is intentionally blocked by the
+  gate until caches are rebuilt per-run (train/val arrays are
+  unchanged, only the version stamp differs).

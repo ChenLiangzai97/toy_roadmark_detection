@@ -77,17 +77,21 @@ def default_camera(cfg: GenConfig, rng: Optional[random.Random] = None,
 
 
 def _T_C_E_with_yaw(pitch_down: float, yaw: float, pos: list[float]):
-    """R_C_E = Ry(yaw) applied to the pitch-only default.
+    """World-frame yaw/pitch camera pose (matches the editor's
+    tceFromPitchYaw / cameraPoseFromT).
 
-    Compose: first default pitch-down rotation R0, then rotate the camera
-    about ego z by yaw: R = Rz(yaw) @ R0.
+    Rows of R are the camera axes in ego coords:
+      right   = (sin yaw, -cos yaw, 0)
+      down    = (-sin a cos y, -sin a sin y, -cos a)
+      forward = (cos a cos y, cos a sin y, -sin a)   [optical axis]
+    A previous version composed Rz @ R0, which rotated in the CAMERA
+    frame (a roll) and left the optical axis unchanged.
     """
-    s, c = math.sin(pitch_down), math.cos(pitch_down)
-    R0 = [[0.0, -1.0, 0.0], [-s, 0.0, -c], [c, 0.0, -s]]
+    sa, ca = math.sin(pitch_down), math.cos(pitch_down)
     sy, cy = math.sin(yaw), math.cos(yaw)
-    Rz = [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]]
-    R = [[sum(Rz[i][k] * R0[k][j] for k in range(3)) for j in range(3)]
-         for i in range(3)]
+    R = [[sy, -cy, 0.0],
+         [-sa * cy, -sa * sy, -ca],
+         [ca * cy, ca * sy, -sa]]
     t = [-sum(R[i][k] * pos[k] for k in range(3)) for i in range(3)]
     return [[R[i][0], R[i][1], R[i][2], t[i]] for i in range(3)] + \
         [[0.0, 0.0, 0.0, 1.0]]

@@ -211,6 +211,33 @@ def test_camera_gizmo_and_preview_zoom():
             pv = page.locator("div[style*='aspect-ratio']").first
             box = pv.bounding_box()
             mx, my = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+            def pose_of(T):
+                # world-frame yaw/pitch from the optical axis (row 2)
+                return (math.atan2(T[2][1], T[2][0]),
+                        math.asin(-max(-1.0, min(1.0, T[2][2]))))
+
+            yaw0, pitch0 = pose_of(cal_before["T_C_E"])
+
+            # SMALL drag first: continuity, no 90-degree jump (the old
+            # extraction mis-read yaw=0 as 90deg and jumped on first move)
+            page.mouse.move(mx, my)
+            page.mouse.down()
+            page.mouse.move(mx + 10, my + 2, steps=4)
+            page.mouse.up()
+            time.sleep(0.8)
+            small = snap()["cameras"][0]
+            yaw_s, pitch_s = pose_of(small["T_C_E"])
+            dyaw = math.atan2(math.sin(yaw_s - yaw0), math.cos(yaw_s - yaw0))
+            dpitch = pitch_s - pitch0
+            assert abs(dyaw - (-10 * 0.003)) < 0.01, \
+                f"small yaw drag moved {dyaw:.3f} rad (want ~-0.03)"
+            assert abs(dpitch - 2 * 0.003) < 0.01, \
+                f"small pitch drag moved {dpitch:.3f} rad (want ~0.006)"
+            page.click("button[title='undo']")
+            time.sleep(0.5)
+
+            # larger look-drag: heading changes, optical axis follows
             page.mouse.move(mx, my)
             page.mouse.down()
             page.mouse.move(mx + 60, my + 24, steps=8)
@@ -225,6 +252,12 @@ def test_camera_gizmo_and_preview_zoom():
             pa = _cam_pos_from_T(cal_after["T_C_E"])
             pb = _cam_pos_from_T(cal_before["T_C_E"])
             assert math.dist(pa, pb) < 1e-9, "position must not change"
+            # optical axis really rotated in the world frame
+            yaw1, pitch1 = pose_of(cal_after["T_C_E"])
+            big = math.atan2(math.sin(yaw1 - yaw0), math.cos(yaw1 - yaw0))
+            assert abs(big - (-60 * 0.003)) < 0.02, \
+                f"yaw moved {big:.3f} rad (want ~-0.18)"
+            assert abs((pitch1 - pitch0) - 24 * 0.003) < 0.02
             # one undo returns to the pre-look state
             page.click("button[title='undo']")
             time.sleep(0.5)
