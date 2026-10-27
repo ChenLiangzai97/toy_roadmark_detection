@@ -66,16 +66,235 @@ function Row({ children }: { children: React.ReactNode }) {
   return <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>{children}</div>;
 }
 
-function Btn({ children, onClick, active, title }: {
-  children: React.ReactNode; onClick: () => void; active?: boolean; title?: string;
+function Btn({ children, onClick, active, title, disabled }: {
+  children: React.ReactNode; onClick: () => void; active?: boolean;
+  title?: string; disabled?: boolean;
 }) {
   return (
-    <button title={title} onClick={onClick}
+    <button title={title} onClick={onClick} disabled={disabled}
       style={{
         padding: "4px 8px", cursor: "pointer", fontSize: 12,
         background: active ? "#3a6ea5" : "#2a2f36", color: "#e8e8e8",
         border: "1px solid #444", borderRadius: 4,
       }}>{children}</button>
+  );
+}
+
+/* -------------------------- detection workspace ---------------------------- */
+
+const DET_CLASS_NAMES = ["直行", "左转", "右转", "直左", "直右", "左右"];
+const DET_CLASS_COLORS = ["#e63946", "#29537a", "#2a9d8f",
+                          "#e76f51", "#5e60ce", "#bc4749"];
+
+function DetectionPanel(props: {
+  runs: { run: string; f1?: number; conf?: number }[];
+  run: string; setRun: (r: string) => void;
+  split: string; setSplit: (s: string) => void;
+  sample: string; setSample: (s: string) => void;
+  result: {
+    sample_id: string;
+    camera: { K: number[][]; T_C_E: number[][]; width: number; height: number };
+    rgb_png_b64: string;
+    bev_range: { x_min: number; x_max: number; y_min: number; y_max: number };
+    conf_threshold?: number;
+    predictions: { prob: number; cls: number;
+      center_norm: number[]; dir: number[] }[];
+    gt: { class_id: number; center_ego: number[]; yaw_rad: number;
+      arrow_valid: boolean; ignore_reason: string | null }[];
+  } | null;
+  busy: boolean; err: string;
+  onDetect: () => void; onStep: (d: number) => void;
+  onRefreshRuns: () => void;
+}) {
+  const rgbRef = useRef<HTMLCanvasElement>(null);
+  const bevRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    const r = props.result;
+    if (!r) return;
+    // draw once the RGB image has decoded (the hoisted inner function
+    // previously shadowed the real draw() and silently no-op'd)
+    const img = new Image();
+    img.onload = () => { imgRef.current = img; draw(); };
+    img.src = "data:image/png;base64," + r.rgb_png_b64;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.result]);
+
+  function draw() {
+    const r = props.result;
+    const img = imgRef.current;
+    if (!r || !img) return;
+    const cv = rgbRef.current;
+    if (!cv) return;
+    const W = r.camera.width, H = r.camera.height;
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0);
+    const K = r.camera.K, T = r.camera.T_C_E;
+    const proj = (x: number, y: number): [number, number] => {
+      const X = K[0][0] * (T[0][0] * x + T[0][1] * y + T[0][2] * 0 + T[0][3])
+        + K[0][2] * (T[2][0] * x + T[2][1] * y + T[2][2] * 0 + T[2][3]);
+      const Y = K[1][1] * (T[1][0] * x + T[1][1] * y + T[1][2] * 0 + T[1][3])
+        + K[1][2] * (T[2][0] * x + T[2][1] * y + T[2][2] * 0 + T[2][3]);
+      const Z = T[2][0] * x + T[2][1] * y + T[2][2] * 0 + T[2][3];
+      return [X / Z, Y / Z];
+    };
+    // ground truth: hollow green circles (+ gray for ignored)
+    for (const g of r.gt) {
+      const [u, v] = proj(g.center_ego[0], g.center_ego[1]);
+      ctx.beginPath();
+      ctx.arc(u, v, 7, 0, Math.PI * 2);
+      ctx.strokeStyle = g.arrow_valid ? "#3dff6e" : "#8a8f96";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      if (!g.arrow_valid && g.ignore_reason) {
+        ctx.fillStyle = "#8a8f96";
+        ctx.font = "8px sans-serif";
+        ctx.fillText(g.ignore_reason.slice(0, 6), u + 9, v + 3);
+      }
+    }
+    // predictions above threshold: filled circles + heading + conf
+    const thr = r.conf_threshold ?? 0.5;
+    for (const p of r.predictions) {
+      if (p.prob < thr) continue;
+      const b = r.bev_range;
+      const x = b.x_min + p.center_norm[0] * (b.x_max - b.x_min);
+      const y = b.y_min + p.center_norm[1] * (b.y_max - b.y_min);
+      const [u, v] = proj(x, y);
+      const col = DET_CLASS_COLORS[p.cls % 6];
+      ctx.beginPath();
+      ctx.arc(u, v, 5, 0, Math.PI * 2);
+      ctx.fillStyle = col;
+      ctx.globalAlpha = 0.75;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(u, v);
+      ctx.lineTo(u + 16 * p.dir[0], v + 16 * p.dir[1]);
+      ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.font = "9px sans-serif";
+      ctx.fillText(p.prob.toFixed(2), u + 7, v - 6);
+    }
+    drawBev();
+  }
+
+  function drawBev() {
+    const r = props.result;
+    const cv = bevRef.current;
+    if (!r || !cv) return;
+    const BW = 160, BH = 320; // native BEV orientation: far on top
+    cv.width = BW; cv.height = BH;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#14171b";
+    ctx.fillRect(0, 0, BW, BH);
+    const b = r.bev_range;
+    const toPx = (x: number, y: number): [number, number] => [
+      (b.y_max - y) / (b.y_max - b.y_min) * BW,
+      (b.x_max - x) / (b.x_max - b.x_min) * BH];
+    for (const g of r.gt) {
+      const [px, py] = toPx(g.center_ego[0], g.center_ego[1]);
+      ctx.beginPath();
+      ctx.arc(px, py, 6, 0, Math.PI * 2);
+      ctx.strokeStyle = g.arrow_valid ? "#3dff6e" : "#8a8f96";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // GT heading
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px - 12 * Math.sin(g.yaw_rad),
+                 py - 12 * Math.cos(g.yaw_rad));
+      ctx.stroke();
+    }
+    const thr = r.conf_threshold ?? 0.5;
+    for (const p of r.predictions) {
+      if (p.prob < thr) continue;
+      const x = b.x_min + p.center_norm[0] * (b.x_max - b.x_min);
+      const y = b.y_min + p.center_norm[1] * (b.y_max - b.y_min);
+      const [px, py] = toPx(x, y);
+      const col = DET_CLASS_COLORS[p.cls % 6];
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.fillStyle = col;
+      ctx.globalAlpha = 0.8;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px - 14 * p.dir[1], py - 14 * p.dir[0]);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+
+  useEffect(() => {
+    if (props.result && imgRef.current) draw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.result]);
+
+  const r = props.result;
+  return (
+    <div data-testid="detection-panel">
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap",
+                    alignItems: "center", marginBottom: 6 }}>
+        <select value={props.run} onChange={(e) => props.setRun(e.target.value)}>
+          {props.runs.map((x) => (
+            <option key={x.run} value={x.run}>
+              {x.run}{x.f1 != null ? ` (f1 ${x.f1.toFixed(3)})` : ""}
+            </option>
+          ))}
+        </select>
+        <Btn onClick={props.onRefreshRuns}>刷新列表</Btn>
+        <select value={props.split} onChange={(e) => props.setSplit(e.target.value)}>
+          {["val", "test_clean", "test_occlusion", "test_pose"].map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        <Btn onClick={() => props.onStep(-1)} title="previous sample">← 上一帧</Btn>
+        <input value={props.sample} onChange={(e) => props.setSample(e.target.value)}
+          placeholder="sample id" style={{ flex: 1 }} />
+        <Btn onClick={() => props.onStep(1)} title="next sample">下一帧 →</Btn>
+      </div>
+      <Btn onClick={props.onDetect} disabled={props.busy ? true : undefined}>
+        {props.busy ? "推理中…" : "推理"}
+      </Btn>
+      {props.err && <div style={{ color: "#f66", fontSize: 12, marginTop: 4 }}>{props.err}</div>}
+      {r && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 12, color: "#9ab", marginBottom: 4 }}>
+            {r.sample_id} · 阈值 {r.conf_threshold ?? 0.5} · 预测 {r.predictions.filter(
+              (p: { prob: number }) => p.prob >= (r.conf_threshold ?? 0.5)).length} / GT {r.gt.length}
+          </div>
+          <canvas ref={rgbRef} data-testid="detect-rgb" style={{
+            width: "100%", border: "1px solid #333",
+            imageRendering: "pixelated", display: "block" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <canvas ref={bevRef} data-testid="detect-bev" style={{
+              height: 200, width: "auto", border: "1px solid #333",
+              imageRendering: "pixelated" }} />
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ color: "#3dff6e" }}>○ 真值 (有效)</div>
+              <div style={{ color: "#8a8f96" }}>○ 真值 (忽略)</div>
+              <div style={{ color: "#ddd" }}>● 预测 (按类别着色)</div>
+              {DET_CLASS_NAMES.map((n, i) => (
+                <div key={n} style={{ color: DET_CLASS_COLORS[i] }}>
+                  ● {i} {n}
+                </div>
+              ))}
+              <div style={{ color: "#9ab" }}>数字 = 置信度</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -500,6 +719,68 @@ function App() {
   useEffect(() => { vpRef.current?.setTopView(topView); }, [topView]);
 
   /* ------------------------------ preview cam ------------------------------ */
+  const [rightTab, setRightTab] = useState<"props" | "detect">("props");
+  const [detRuns, setDetRuns] = useState<{ run: string; f1?: number;
+    conf?: number }[]>([]);
+  const [detRun, setDetRun] = useState("");
+  const [detSplit, setDetSplit] = useState("val");
+  const [detSample, setDetSample] = useState("");
+  const [detResult, setDetResult] = useState<null | {
+    sample_id: string; camera: { K: number[][]; T_C_E: number[][]; width: number; height: number };
+    rgb_png_b64: string; bev_range: { x_min: number; x_max: number; y_min: number; y_max: number };
+    conf_threshold?: number;
+    predictions: { prob: number; cls: number; center_norm: number[];
+      dir: number[] }[];
+    gt: { class_id: number; center_ego: number[]; yaw_rad: number;
+      arrow_valid: boolean; ignore_reason: string | null }[];
+  }>(null);
+  const [detBusy, setDetBusy] = useState(false);
+  const [detErr, setDetErr] = useState("");
+
+  const loadDetRuns = useCallback(async () => {
+    try {
+      const r = await fetch("/api/detect-runs");
+      const j = await r.json();
+      setDetRuns(j.runs ?? []);
+      if (j.runs?.length && !detRun) {
+        setDetRun(j.runs[0].run);
+        setDetSample("");
+      }
+    } catch { /* server offline */ }
+  }, [detRun]);
+
+  const runDetect = useCallback(async (sampleId?: string) => {
+    if (!detRun) return;
+    setDetBusy(true); setDetErr(""); setDetResult(null);
+    try {
+      const sid = sampleId ?? detSample;
+      const r = await fetch("/api/detect", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run: detRun, split: detSplit,
+                               sample_id: sid }),
+      });
+      if (!r.ok) {
+        setDetErr(`detect failed: HTTP ${r.status}`);
+        return;
+      }
+      const j = await r.json();
+      setDetResult(j);
+      setDetSample(j.sample_id);
+    } catch (e) {
+      setDetErr(`detect error: ${e}`);
+    } finally {
+      setDetBusy(false);
+    }
+  }, [detRun, detSplit, detSample]);
+
+  const detStep = useCallback(async (delta: number) => {
+    if (!detResult) return;
+    const m = detResult.sample_id.match(/^(.*?)(\d+)$/);
+    if (!m) return;
+    const next = `${m[1]}${String(parseInt(m[2]) + delta).padStart(
+      m[2].length, "0")}`;
+    await runDetect(next);
+  }, [detResult, runDetect]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const refreshPreview = useCallback(async () => {
@@ -1126,9 +1407,24 @@ function App() {
       />
       {/* right panel */}
       <div data-testid="props-panel" style={{ gridArea: "panel", borderLeft: "1px solid #2a2f36", padding: 8, overflowY: "auto" }}>
-        <h4 style={{ margin: "2px 0 6px" }}>属性</h4>
+        <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+          <Btn active={rightTab === "props"} onClick={() => setRightTab("props")}>属性</Btn>
+          <Btn active={rightTab === "detect"} onClick={() => { setRightTab("detect"); loadDetRuns(); }}>检测结果</Btn>
+        </div>
+        {rightTab === "props" && <>
         {selPanel}
         <h4 style={{ margin: "12px 0 6px" }}>batch generation</h4>
+        </>}
+        {rightTab === "detect" && (
+          <DetectionPanel
+            runs={detRuns} run={detRun} setRun={setDetRun}
+            split={detSplit} setSplit={setDetSplit}
+            sample={detSample} setSample={setDetSample}
+            result={detResult} busy={detBusy} err={detErr}
+            onDetect={() => runDetect()} onStep={detStep}
+            onRefreshRuns={loadDetRuns}
+          />
+        )}
         <label style={{ display: "flex", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
           <span>dataset</span>
           <input value={batch.dataset} onChange={(e) => setBatch({ ...batch, dataset: e.target.value })} style={{ width: 130 }} />
