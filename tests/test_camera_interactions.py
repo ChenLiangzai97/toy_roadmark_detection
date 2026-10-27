@@ -71,7 +71,7 @@ def test_scale_drag_absolute_and_deterministic():
             cb = canvas.bounding_box()
             cw, ch = cb["width"], cb["height"]
             # place a box at a known spot and select it
-            page.click("button:has-text('+box')")
+            page.click("button:has-text('方盒')")
             bx, by = cb["x"] + cw * 0.5, cb["y"] + ch * 0.62
             page.mouse.click(bx, by)
             page.wait_for_function(

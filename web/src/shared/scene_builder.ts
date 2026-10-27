@@ -119,6 +119,17 @@ function buildObject(obj: SceneV1["objects"][number]): THREE.Object3D {
     mesh.rotation.x = Math.PI / 2; // cylinder axis (default y) -> z
     mesh.position.z = size[2] / 2;
     g.add(mesh);
+  } else if (obj.shape === "sphere") {
+    const r = Math.min(size[0], size[1], size[2]) / 2;
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), mat);
+    mesh.position.z = r;
+    g.add(mesh);
+  } else if (obj.shape === "cone") {
+    const mesh = new THREE.Mesh(
+      new THREE.ConeGeometry(size[0] / 2, size[2], 16), mat);
+    mesh.rotation.x = Math.PI / 2; // cone axis (default y) -> z
+    mesh.position.z = size[2] / 2;
+    g.add(mesh);
   } else { // car: body + cabin
     const [L, W, H] = size;
     const bodyH = H * 0.6;

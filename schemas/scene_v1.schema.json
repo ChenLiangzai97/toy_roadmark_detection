@@ -108,7 +108,7 @@
       "required": ["object_id", "shape", "center_ego", "yaw_rad"],
       "properties": {
         "object_id": { "type": "string", "minLength": 1 },
-        "shape": { "enum": ["box", "cylinder", "car"] },
+        "shape": { "enum": ["box", "cylinder", "car", "sphere", "cone"] },
         "size_abc": { "$ref": "#/definitions/vec3", "description": "box: length(x) width(y) height(z); cylinder: [diameter, diameter, height]; car: body size" },
         "center_ego": { "$ref": "#/definitions/vec3" },
         "yaw_rad": { "type": "number" },

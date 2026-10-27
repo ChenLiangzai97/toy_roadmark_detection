@@ -146,9 +146,31 @@ function FullscreenViewer({ url, onClose }: { url: string; onClose: () => void }
   );
 }
 
+/* ----------------------------- object library ------------------------------ */
+
+interface LibraryEntry {
+  label: string;
+  shape: SceneObject["shape"];
+  size: [number, number, number];
+  color?: string;
+}
+
+const OBJECT_LIBRARY: LibraryEntry[] = [
+  { label: "方盒", shape: "box", size: [1.2, 1.2, 1.5] },
+  { label: "高箱", shape: "box", size: [1.5, 1.5, 3.0] },
+  { label: "墙体", shape: "box", size: [4.0, 0.3, 1.5] },
+  { label: "厢式车", shape: "box", size: [5.0, 2.0, 2.4], color: "#9aa0a8" },
+  { label: "圆柱", shape: "cylinder", size: [1.0, 1.0, 1.6] },
+  { label: "立杆", shape: "cylinder", size: [0.3, 0.3, 3.5] },
+  { label: "圆桶", shape: "cylinder", size: [0.6, 0.6, 0.9], color: "#d2691e" },
+  { label: "球体", shape: "sphere", size: [1.2, 1.2, 1.2] },
+  { label: "锥体", shape: "cone", size: [1.4, 1.4, 1.8], color: "#d2691e" },
+  { label: "轿车", shape: "car", size: [4.2, 1.8, 1.5] },
+];
+
 /* ---------------------------------- app ----------------------------------- */
 
-type Tool = "select" | "add_box" | "add_cylinder" | "add_car" | "add_arrow"
+type Tool = "select" | "add_object" | "add_arrow"
   | "draw_line" | "add_lane" | "add_camera";
 
 function App() {
@@ -190,6 +212,8 @@ function App() {
   const [lineDraft, setLineDraft] = useState<number[][] | null>(null);
   const [laneDraft, setLaneDraft] = useState<number[][] | null>(null);
   const [arrowClass, setArrowClass] = useState(0);
+  const [libIdx, setLibIdx] = useState(0);
+  const [rightW, setRightW] = useState(280);
 
   const undoStack = useRef<string[]>([]);
   const redoStack = useRef<string[]>([]);
@@ -324,19 +348,19 @@ function App() {
       },
       onGroundClick: (x, y) => {
         const t: Tool = toolRef.current;
-        if (t === "add_box" || t === "add_cylinder" || t === "add_car") {
+        if (t === "add_object") {
+          const entry = OBJECT_LIBRARY[arrowClassRef2.current];
           commit((prev) => {
             const next = JSON.parse(JSON.stringify(prev)) as SceneV1;
-                    const size: [number, number, number] =
-            t === "add_car" ? [4.0, 1.8, 1.5] : [1.2, 1.2, 1.5];
             const obj: SceneObject = {
-              object_id: uid("obj"), shape: t === "add_box" ? "box" : t === "add_car" ? "car" : "cylinder",
-              size_abc: size, center_ego: [x, y, 0], yaw_rad: 0, color: "#7a7f85",
+              object_id: uid("obj"), shape: entry.shape,
+              size_abc: entry.size, center_ego: [x, y, 0], yaw_rad: 0,
+              color: entry.color ?? "#7a7f85",
             };
             next.objects.push(obj);
             return next;
           });
-          setStatus(`added ${t} at ${x.toFixed(1)},${y.toFixed(1)}`);
+          setStatus(`added ${entry.label} at ${x.toFixed(1)},${y.toFixed(1)}`);
         } else if (t === "add_arrow") {
           commit((prev) => {
             const next = JSON.parse(JSON.stringify(prev)) as SceneV1;
@@ -369,6 +393,7 @@ function App() {
   const selRef = useRef(sel); selRef.current = sel;
   const toolRef = useRef(tool); toolRef.current = tool;
   const arrowClassRef = useRef(arrowClass); arrowClassRef.current = arrowClass;
+  const arrowClassRef2 = useRef(libIdx); arrowClassRef2.current = libIdx;
 
   useEffect(() => { vpRef.current?.setScene(scene); }, [scene]);
   useEffect(() => { vpRef.current?.setSelection(sel, scene); }, [sel, scene]);
@@ -402,6 +427,7 @@ function App() {
 
   /** Camera "look" drag on the preview at 1x: dx -> yaw, dy -> pitch.
    *  Pushes ONE undo snapshot per gesture like the 3D gizmo. */
+  const splitRef = useRef<{ x: number; w: number } | null>(null);
   const lookRef = useRef<{ x: number; y: number; yaw: number; pitch: number;
                            pushed: boolean } | null>(null);
   const lookDrag = (e: React.PointerEvent) => {
@@ -765,7 +791,7 @@ function App() {
 
   /* --------------------------------- render -------------------------------- */
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "190px 1fr 260px", height: "100vh", color: "#e8e8e8", fontFamily: "sans-serif", background: "#14171b" }}>
+    <div style={{ display: "grid", gridTemplateColumns: `190px 1fr 5px ${rightW}px`, height: "100vh", color: "#e8e8e8", fontFamily: "sans-serif", background: "#14171b" }}>
       {/* toolbar */}
       <div style={{ borderRight: "1px solid #2a2f36", padding: 8, overflowY: "auto" }}>
         <h3 style={{ margin: "4px 0" }}>arrow-toy</h3>
@@ -781,11 +807,16 @@ function App() {
         <hr style={{ borderColor: "#2a2f36" }} />
         <div style={{ fontSize: 11, color: "#9ab", marginBottom: 4 }}>tools</div>
         <Row><Btn active={tool === "select"} onClick={() => setTool("select")}>select</Btn></Row>
-        <Row>
-          <Btn active={tool === "add_box"} onClick={() => setTool("add_box")}>+box</Btn>
-          <Btn active={tool === "add_cylinder"} onClick={() => setTool("add_cylinder")}>+cyl</Btn>
-        </Row>
-        <Row><Btn active={tool === "add_car"} onClick={() => setTool("add_car")}>+car</Btn></Row>
+        <div style={{ fontSize: 11, color: "#9ab", margin: "4px 0" }}>object library</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 4 }}>
+          {OBJECT_LIBRARY.map((entry) => (
+            <Btn key={entry.label} active={tool === "add_object" && libIdx === OBJECT_LIBRARY.indexOf(entry)}
+                 onClick={() => { setTool("add_object"); setLibIdx(OBJECT_LIBRARY.indexOf(entry)); }}
+                 title={`${entry.shape} ${entry.size.join("x")}`}>
+              {entry.label}
+            </Btn>
+          ))}
+        </div>
         <Row>
           <Btn active={tool === "add_arrow"} onClick={() => setTool("add_arrow")}>+arrow</Btn>
           <select value={arrowClass} onChange={(e) => setArrowClass(parseInt(e.target.value))}>
@@ -886,6 +917,21 @@ function App() {
         </div>
       </div>
 
+      {/* panel splitter (drag to resize the right panel) */}
+      <div
+        onPointerDown={(e) => {
+          splitRef.current = { x: e.clientX, w: rightW };
+          (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const p = splitRef.current;
+          if (!p) return;
+          setRightW(Math.min(560, Math.max(220, p.w - (e.clientX - p.x))));
+        }}
+        onPointerUp={() => { splitRef.current = null; }}
+        style={{ cursor: "col-resize", background: "#22262c" }}
+        title="drag to resize panel"
+      />
       {/* right panel */}
       <div style={{ borderLeft: "1px solid #2a2f36", padding: 8, overflowY: "auto" }}>
         <h4 style={{ margin: "2px 0 6px" }}>properties</h4>

@@ -29,7 +29,7 @@ export interface Ground {
 
 export interface SceneObject {
   object_id: string;
-  shape: "box" | "cylinder" | "car";
+  shape: "box" | "cylinder" | "car" | "sphere" | "cone";
   size_abc?: Vec3;
   center_ego: Vec3;
   yaw_rad: number;

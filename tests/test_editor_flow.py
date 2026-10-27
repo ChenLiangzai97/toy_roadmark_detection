@@ -128,7 +128,7 @@ def test_editor_full_flow(tmp_path):
             page.mouse.click(cx, cy)
             page.wait_for_function(
                 "() => document.body.innerText.includes('arrows: 1')")
-            page.click("button:has-text('+box')")
+            page.click("button:has-text('方盒')")
             page.mouse.click(cx - 200, cy + 80)
             page.wait_for_function(
                 "() => document.body.innerText.includes('objects: 1')")
