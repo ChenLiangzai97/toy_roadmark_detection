@@ -10,6 +10,7 @@ import { CLASS_NAMES } from "../shared/types";
 import { TEMPLATE_IDS, TEMPLATES } from "../shared/templates";
 import { intrinsicsFromFovV, KFromIntrinsics, defaultCameraTCE } from "../shared/geometry";
 import { ThreeViewport, type SelectionKind } from "./three_view";
+import { headingSegment } from "../shared/detection";
 import { validateSceneV1 } from "../shared/validate";
 
 /* ------------------------------ scene helpers ----------------------------- */
@@ -96,7 +97,7 @@ function DetectionPanel(props: {
     camera: { K: number[][]; T_C_E: number[][]; width: number; height: number };
     rgb_png_b64: string;
     bev_range: { x_min: number; x_max: number; y_min: number; y_max: number };
-    conf_threshold?: number;
+    conf_threshold?: number; conf_source?: string;
     predictions: { prob: number; cls: number;
       center_norm: number[]; dir: number[] }[];
     gt: { class_id: number; center_ego: number[]; yaw_rad: number;
@@ -109,6 +110,8 @@ function DetectionPanel(props: {
   const rgbRef = useRef<HTMLCanvasElement>(null);
   const bevRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const [showGT, setShowGT] = useState(true);
+  const [showPred, setShowPred] = useState(true);
 
   useEffect(() => {
     const r = props.result;
@@ -132,53 +135,63 @@ function DetectionPanel(props: {
     const ctx = cv.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(img, 0, 0);
-    const K = r.camera.K, T = r.camera.T_C_E;
-    const proj = (x: number, y: number): [number, number] => {
-      const X = K[0][0] * (T[0][0] * x + T[0][1] * y + T[0][2] * 0 + T[0][3])
-        + K[0][2] * (T[2][0] * x + T[2][1] * y + T[2][2] * 0 + T[2][3]);
-      const Y = K[1][1] * (T[1][0] * x + T[1][1] * y + T[1][2] * 0 + T[1][3])
-        + K[1][2] * (T[2][0] * x + T[2][1] * y + T[2][2] * 0 + T[2][3]);
-      const Z = T[2][0] * x + T[2][1] * y + T[2][2] * 0 + T[2][3];
-      return [X / Z, Y / Z];
-    };
+    const cam = r.camera;
     // ground truth: hollow green circles (+ gray for ignored)
-    for (const g of r.gt) {
-      const [u, v] = proj(g.center_ego[0], g.center_ego[1]);
-      ctx.beginPath();
-      ctx.arc(u, v, 7, 0, Math.PI * 2);
-      ctx.strokeStyle = g.arrow_valid ? "#3dff6e" : "#8a8f96";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      if (!g.arrow_valid && g.ignore_reason) {
-        ctx.fillStyle = "#8a8f96";
-        ctx.font = "8px sans-serif";
-        ctx.fillText(g.ignore_reason.slice(0, 6), u + 9, v + 3);
+    if (showGT) {
+      for (const g of r.gt) {
+        const pv = headingSegment(cam, g.center_ego[0], g.center_ego[1],
+                                  [1, 0], 0); // center only
+        if (!pv) continue;
+        const [u, v] = pv[0];
+        ctx.beginPath();
+        ctx.arc(u, v, 7, 0, Math.PI * 2);
+        ctx.strokeStyle = g.arrow_valid ? "#3dff6e" : "#8a8f96";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        if (!g.arrow_valid && g.ignore_reason) {
+          ctx.fillStyle = "#8a8f96";
+          ctx.font = "8px sans-serif";
+          ctx.fillText(g.ignore_reason.slice(0, 6), u + 9, v + 3);
+        }
       }
     }
-    // predictions above threshold: filled circles + heading + conf
+    // predictions above threshold: filled circles + heading + conf.
+    // Heading lines project BOTH endpoints through K/T (a naive
+    // image-space offset draws the wrong axis: world +x maps UP in the
+    // default camera, not right); skip behind-camera/non-finite.
     const thr = r.conf_threshold ?? 0.5;
-    for (const p of r.predictions) {
-      if (p.prob < thr) continue;
-      const b = r.bev_range;
-      const x = b.x_min + p.center_norm[0] * (b.x_max - b.x_min);
-      const y = b.y_min + p.center_norm[1] * (b.y_max - b.y_min);
-      const [u, v] = proj(x, y);
-      const col = DET_CLASS_COLORS[p.cls % 6];
-      ctx.beginPath();
-      ctx.arc(u, v, 5, 0, Math.PI * 2);
-      ctx.fillStyle = col;
-      ctx.globalAlpha = 0.75;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = col;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(u, v);
-      ctx.lineTo(u + 16 * p.dir[0], v + 16 * p.dir[1]);
-      ctx.stroke();
-      ctx.fillStyle = col;
-      ctx.font = "9px sans-serif";
-      ctx.fillText(p.prob.toFixed(2), u + 7, v - 6);
+    if (showPred) {
+      for (const p of r.predictions) {
+        if (p.prob < thr) continue;
+        const b = r.bev_range;
+        const x = b.x_min + p.center_norm[0] * (b.x_max - b.x_min);
+        const y = b.y_min + p.center_norm[1] * (b.y_max - b.y_min);
+        const c0 = headingSegment(cam, x, y, [1, 0], 0);
+        if (!c0) continue;
+        const [u, v] = c0[0];
+        const col = DET_CLASS_COLORS[p.cls % 6];
+        ctx.beginPath();
+        ctx.arc(u, v, 5, 0, Math.PI * 2);
+        ctx.fillStyle = col;
+        ctx.globalAlpha = 0.75;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        // heading: BOTH endpoints projected (world +x draws UP in the
+        // default camera, not right); skip invalid segments
+        const seg = headingSegment(
+          cam, x, y, [p.dir[0], p.dir[1]], 0.6);
+        if (seg) {
+          ctx.strokeStyle = col;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(seg[0][0], seg[0][1]);
+          ctx.lineTo(seg[1][0], seg[1][1]);
+          ctx.stroke();
+        }
+        ctx.fillStyle = col;
+        ctx.font = "9px sans-serif";
+        ctx.fillText(p.prob.toFixed(2), u + 7, v - 6);
+      }
     }
     drawBev();
   }
@@ -197,22 +210,24 @@ function DetectionPanel(props: {
     const toPx = (x: number, y: number): [number, number] => [
       (b.y_max - y) / (b.y_max - b.y_min) * BW,
       (b.x_max - x) / (b.x_max - b.x_min) * BH];
-    for (const g of r.gt) {
-      const [px, py] = toPx(g.center_ego[0], g.center_ego[1]);
-      ctx.beginPath();
-      ctx.arc(px, py, 6, 0, Math.PI * 2);
-      ctx.strokeStyle = g.arrow_valid ? "#3dff6e" : "#8a8f96";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      // GT heading
-      ctx.beginPath();
-      ctx.moveTo(px, py);
-      ctx.lineTo(px - 12 * Math.sin(g.yaw_rad),
-                 py - 12 * Math.cos(g.yaw_rad));
-      ctx.stroke();
+    if (showGT) {
+      for (const g of r.gt) {
+        const [px, py] = toPx(g.center_ego[0], g.center_ego[1]);
+        ctx.beginPath();
+        ctx.arc(px, py, 6, 0, Math.PI * 2);
+        ctx.strokeStyle = g.arrow_valid ? "#3dff6e" : "#8a8f96";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // GT heading
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px - 12 * Math.sin(g.yaw_rad),
+                   py - 12 * Math.cos(g.yaw_rad));
+        ctx.stroke();
+      }
     }
     const thr = r.conf_threshold ?? 0.5;
-    for (const p of r.predictions) {
+    if (showPred) for (const p of r.predictions) {
       if (p.prob < thr) continue;
       const x = b.x_min + p.center_norm[0] * (b.x_max - b.x_min);
       const y = b.y_min + p.center_norm[1] * (b.y_max - b.y_min);
@@ -236,7 +251,7 @@ function DetectionPanel(props: {
   useEffect(() => {
     if (props.result && imgRef.current) draw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.result]);
+  }, [props.result, showGT, showPred]);
 
   const r = props.result;
   return (
@@ -263,14 +278,26 @@ function DetectionPanel(props: {
           placeholder="sample id" style={{ flex: 1 }} />
         <Btn onClick={() => props.onStep(1)} title="next sample">下一帧 →</Btn>
       </div>
-      <Btn onClick={props.onDetect} disabled={props.busy ? true : undefined}>
-        {props.busy ? "推理中…" : "推理"}
-      </Btn>
+      <div style={{ display: "flex", gap: 10, alignItems: "center",
+                    flexWrap: "wrap" }}>
+        <Btn onClick={props.onDetect} disabled={props.busy ? true : undefined}>
+          {props.busy ? "推理中…" : "推理"}
+        </Btn>
+        <label style={{ fontSize: 12 }}>
+          <input type="checkbox" checked={showGT}
+                 onChange={(e) => setShowGT(e.target.checked)} /> 真值
+        </label>
+        <label style={{ fontSize: 12 }}>
+          <input type="checkbox" checked={showPred}
+                 onChange={(e) => setShowPred(e.target.checked)} /> 预测
+        </label>
+      </div>
       {props.err && <div style={{ color: "#f66", fontSize: 12, marginTop: 4 }}>{props.err}</div>}
       {r && (
         <div style={{ marginTop: 8 }}>
           <div style={{ fontSize: 12, color: "#9ab", marginBottom: 4 }}>
-            {r.sample_id} · 阈值 {r.conf_threshold ?? 0.5} · 预测 {r.predictions.filter(
+            {r.sample_id} · 阈值 {r.conf_threshold ?? 0.5}
+            {r.conf_source ? ` (${r.conf_source === "eval_val" ? "val评测冻结" : r.conf_source})` : ""} · 预测 {r.predictions.filter(
               (p: { prob: number }) => p.prob >= (r.conf_threshold ?? 0.5)).length} / GT {r.gt.length}
           </div>
           <canvas ref={rgbRef} data-testid="detect-rgb" style={{
@@ -728,12 +755,13 @@ function App() {
   const [detResult, setDetResult] = useState<null | {
     sample_id: string; camera: { K: number[][]; T_C_E: number[][]; width: number; height: number };
     rgb_png_b64: string; bev_range: { x_min: number; x_max: number; y_min: number; y_max: number };
-    conf_threshold?: number;
+    conf_threshold?: number; conf_source?: string;
     predictions: { prob: number; cls: number; center_norm: number[];
       dir: number[] }[];
     gt: { class_id: number; center_ego: number[]; yaw_rad: number;
       arrow_valid: boolean; ignore_reason: string | null }[];
   }>(null);
+  const [detIds, setDetIds] = useState<string[]>([]);
   const [detBusy, setDetBusy] = useState(false);
   const [detErr, setDetErr] = useState("");
 
@@ -753,7 +781,7 @@ function App() {
     if (!detRun) return;
     setDetBusy(true); setDetErr(""); setDetResult(null);
     try {
-      const sid = sampleId ?? detSample;
+      const sid = (sampleId ?? detSample) || detIds[0] || "";
       const r = await fetch("/api/detect", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ run: detRun, split: detSplit,
@@ -771,16 +799,47 @@ function App() {
     } finally {
       setDetBusy(false);
     }
-  }, [detRun, detSplit, detSample]);
+  }, [detRun, detSplit, detSample, detIds]);
 
+  // stepping stays WITHIN the split's id list (clamped at the edges)
   const detStep = useCallback(async (delta: number) => {
-    if (!detResult) return;
-    const m = detResult.sample_id.match(/^(.*?)(\d+)$/);
-    if (!m) return;
-    const next = `${m[1]}${String(parseInt(m[2]) + delta).padStart(
-      m[2].length, "0")}`;
-    await runDetect(next);
-  }, [detResult, runDetect]);
+    const cur = detResult?.sample_id ?? detSample;
+    let next: string | undefined;
+    if (detIds.length) {
+      const i = detIds.indexOf(cur);
+      if (i >= 0) {
+        const j = Math.min(detIds.length - 1, Math.max(0, i + delta));
+        next = detIds[j];
+      } else {
+        next = delta > 0 ? detIds[0] : detIds[detIds.length - 1];
+      }
+    } else {
+      const m = cur.match(/^(.*?)(\d+)$/);
+      if (!m) return;
+      next = `${m[1]}${String(parseInt(m[2]) + delta).padStart(
+        m[2].length, "0")}`;
+    }
+    if (next && next !== cur) await runDetect(next);
+  }, [detResult, detSample, detIds, runDetect]);
+
+  // run/split change: clear stale overlays, load the split's id list
+  // and jump to its FIRST sample
+  useEffect(() => {
+    let cancelled = false;
+    setDetResult(null);       // never show the old selection's overlay
+    setDetSample("");
+    (async () => {
+      try {
+        const r = await fetch(`/api/detect-samples?split=${detSplit}`);
+        if (!r.ok) return;
+        const j = await r.json();
+        if (cancelled) return;
+        setDetIds(j.ids ?? []);
+        if (j.ids?.length) setDetSample(j.ids[0]);  // jump to first frame
+      } catch { /* offline */ }
+    })();
+    return () => { cancelled = true; };
+  }, [detSplit]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const refreshPreview = useCallback(async () => {
@@ -1417,7 +1476,8 @@ function App() {
         </>}
         {rightTab === "detect" && (
           <DetectionPanel
-            runs={detRuns} run={detRun} setRun={setDetRun}
+            runs={detRuns} run={detRun} setRun={(r) => {
+              setDetResult(null); setDetRun(r); }}
             split={detSplit} setSplit={setDetSplit}
             sample={detSample} setSample={setDetSample}
             result={detResult} busy={detBusy} err={detErr}

@@ -282,6 +282,25 @@ class DetectRequest(BaseModel):
     sample_id: str
 
 
+def _run_metrics(run_dir: pathlib.Path) -> dict:
+    """Official metrics for a run: the checkpoint re-inference eval
+    (eval_val.json) takes precedence over training-time result.json."""
+    ev = run_dir / "eval_val.json"
+    if ev.exists():
+        m = json.loads(ev.read_text())["metrics"]
+        return {
+            "f1": m.get("f1@0.5"),
+            "conf": m.get("chosen_conf_threshold"),
+            "source": "eval_val",
+        }
+    res = run_dir / "result.json"
+    if res.exists():
+        m = (json.loads(res.read_text()).get("metrics") or {})
+        return {"f1": m.get("f1@0.5"),
+                "conf": m.get("chosen_conf_threshold"),
+                "source": "result"}
+
+
 @app.get("/api/detect-runs")
 def detect_runs():
     """List runs usable by the detection workspace (result.json + ckpt)."""
@@ -297,12 +316,13 @@ def detect_runs():
                 continue
             try:
                 r = json.loads(res.read_text())
+                m = _run_metrics(d)
                 out.append({
                     "run": d.name,
                     "status": r.get("status"),
-                    "f1": (r.get("metrics") or {}).get("f1@0.5"),
-                    "conf": (r.get("metrics") or {}).get(
-                        "chosen_conf_threshold"),
+                    "f1": m["f1"],
+                    "conf": m["conf"],
+                    "conf_source": m["source"],
                     "commit": (json.loads(
                         (d / "environment.json").read_text())
                         if (d / "environment.json").exists() else {}
@@ -311,6 +331,16 @@ def detect_runs():
             except Exception:
                 traceback.print_exc()
     return {"runs": out}
+
+
+@app.get("/api/detect-samples")
+def detect_samples(split: str = "val"):
+    """Ordered sample ids of a split (stepping stays within the split)."""
+    root = pathlib.Path("data/arrow_v1")
+    f = root / "splits" / f"{split}.txt"
+    if not f.exists():
+        raise HTTPException(404, f"unknown split {split}")
+    return {"ids": f.read_text().split()}
 
 
 @app.post("/api/detect")
@@ -329,6 +359,15 @@ def detect(req: DetectRequest):
         raise HTTPException(404, f"unknown run {req.run}")
     cfg = load_yaml(run_dir / "resolved_config.yaml")
     root = pathlib.Path(cfg["dataset"]["root"])
+    # the sample MUST belong to the requested split (no cross-split ids)
+    split_ids = (root / "splits" / f"{req.split}.txt")
+    if not split_ids.exists():
+        raise HTTPException(404, f"unknown split {req.split}")
+    ids = split_ids.read_text().split()
+    if req.sample_id not in ids:
+        raise HTTPException(
+            400, f"sample {req.sample_id} does not belong to split "
+                 f"{req.split}")
     sdir = root / "samples" / req.sample_id
     if not sdir.exists():
         raise HTTPException(404, f"unknown sample {req.sample_id}")
@@ -358,11 +397,11 @@ def detect(req: DetectRequest):
     centers = out["pred_center_norm"].float()[0]
     raw_dir = out["pred_direction_raw"].float()[0]
     dn = raw_dir / raw_dir.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-    res_path = run_dir / "result.json"
     conf = None
-    if res_path.exists():
-        conf = json.loads(res_path.read_text()).get("metrics", {}).get(
-            "chosen_conf_threshold")
+    conf_source = None
+    m = _run_metrics(run_dir)
+    conf = m["conf"]
+    conf_source = m["source"]
     rgb_png = (sdir / "rgb" / f"{cam_id}.png").read_bytes()
     return {
         "sample_id": req.sample_id,
@@ -371,6 +410,7 @@ def detect(req: DetectRequest):
         "rgb_png_b64": base64.b64encode(rgb_png).decode(),
         "bev_range": labels["bev_range"],
         "conf_threshold": conf,
+        "conf_source": conf_source,
         "predictions": [
             {"prob": float(best_p[i]), "cls": int(best_c[i]),
              "center_norm": [float(centers[i][0]), float(centers[i][1])],
