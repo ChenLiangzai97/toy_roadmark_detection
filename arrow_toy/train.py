@@ -30,6 +30,8 @@ torch.backends.cudnn.allow_tf32 = True
 from torch.utils.data import DataLoader
 
 from arrow_toy.data.dataset import ArrowCacheDataset, check_dataset_gate, make_collate
+from arrow_toy.models.dense_head import (focal_heatmap_loss, heatmap_targets,
+                                         offset_loss)
 from arrow_toy.losses.criterion import arrow_criterion, hungarian_match
 from arrow_toy.models.model import ArrowToyModel, count_parameters
 from arrow_toy.utils.config import deep_merge, load_yaml, write_json
@@ -236,6 +238,18 @@ def main(argv=None) -> int:
                 orientation_weight=cfg["loss"]["orientation_weight"],
                 no_object_weight=cfg["loss"]["no_object_class_weight"])
             loss = loss_dict["loss_total"]
+            if "aux_dense" in pred:
+                aux_w = cfg["loss"].get("aux_dense_weight", 1.0)
+                bev_hw = tuple(cfg["model"]["bev_size_hw"])
+                bev_range = tuple(cfg["model"]["bev_range_xy"])
+                cls_map, off_map = heatmap_targets(
+                    batch, bev_hw, bev_range, device=loss.device)
+                hm = focal_heatmap_loss(pred["aux_dense"]["heatmap"].float(),
+                                        cls_map)
+                off = offset_loss(pred["aux_dense"]["offset"].float(),
+                                  off_map, cls_map)
+                loss_dict["loss_aux_dense"] = aux_w * (hm + off)
+                loss = loss + loss_dict["loss_aux_dense"]
             if not torch.isfinite(loss):
                 status = "failed_nonfinite"
                 nonfinite_info = {
@@ -267,6 +281,8 @@ def main(argv=None) -> int:
                        "loss_cls": float(loss_dict["loss_cls"]),
                        "loss_center": float(loss_dict["loss_center"]),
                        "loss_ori": float(loss_dict["loss_ori"]),
+                       "loss_aux_dense": float(loss_dict.get(
+                           "loss_aux_dense", 0.0)),
                        "lr": lr, "n_pos": stats["n_pos"],
                        "grad_norm": float(grad_norm),
                        "t": round(time.monotonic() - t_start, 1)}

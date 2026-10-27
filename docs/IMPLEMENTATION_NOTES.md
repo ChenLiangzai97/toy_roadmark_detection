@@ -280,3 +280,33 @@ data_version a065b96fe99c9dbd, all runs budget-capped 600 s)
   differences; feature-learning differences are NOT excluded. The
   sparse-head-convergence reading stays a hypothesis, now with one
   more consistent data point. Acceptance verdicts unchanged.
+
+
+## Editor UI round 2 (review findings fixed)
+
+- SCALE REGRESSION (severe, review-caught): with the deferred-rebuild fix
+  the gizmo proxy persists through a drag, so per-objectChange relative
+  scaling multiplied cumulatively (one drag: box 1.2 -> 5674 m). Scale
+  write-back is now ABSOLUTE: drag-start sizes/scales are snapshotted in
+  onDragStart and every event computes start * cumulative proxy scale.
+  Regression: same gesture at 5 vs 20 mouse steps gives identical final
+  sizes, bounded magnitude, undo/redo exact.
+- Camera acceptance extended: real rotation via the new preview look-drag
+  (see below) asserts T_C_E changes, K unchanged, position unchanged,
+  single-step undo/redo, save/reload matrix equality.
+- Preview look-drag: dragging the preview image at 1x aims the camera
+  (dx -> yaw, dy -> pitch, 0.003 rad/px; one undo snapshot per gesture,
+  per-move updates do NOT push the stack).
+- Fullscreen viewer: "⤢ 大图" button or overlay with 适应窗口 / 原始
+  100% / +/- / wheel zoom / drag pan / Esc(0/1 shortcuts) close; the
+  sidebar 1x remains fit-to-panel as before.
+- Scope note: this round covers camera interaction + preview viewing;
+  toolbar/object-library/layout and the detection-results workspace are
+  explicitly NOT part of it.
+
+## Experiment F (aux dense supervision) - first attempt, not comparable
+
+- runs/aux_dense_s42: budget_incomplete 867/1500 steps (548.7 s): the
+  Python-side heatmap-target construction doubles step time. f1 0.246 at
+  867 steps is NOT comparable to the 1500-step baselines. Needs GPU-
+  vectorized target building before a fair run; recorded as open.

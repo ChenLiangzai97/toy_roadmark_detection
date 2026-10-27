@@ -79,6 +79,73 @@ function Btn({ children, onClick, active, title }: {
   );
 }
 
+/* --------------------------- fullscreen viewer ---------------------------- */
+
+function FullscreenViewer({ url, onClose }: { url: string; onClose: () => void }) {
+  const [mode, setMode] = useState<"fit" | "100">("fit");
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "0") { setMode("fit"); setScale(1); setPan({ x: 0, y: 0 }); }
+      if (e.key === "1") { setMode("100"); setScale(1); setPan({ x: 0, y: 0 }); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const zoomBy = (f: number) => { setMode("100"); setScale((z) => Math.min(16, Math.max(0.25, z * f))); };
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setMode("100");
+      setScale((z) => Math.min(16, Math.max(0.25, z * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+  const imgStyle: React.CSSProperties = mode === "fit"
+    ? { width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated" }
+    : { transform: `scale(${scale}) translate(${pan.x / scale}px, ${pan.y / scale}px)`,
+        transformOrigin: "0 0", imageRendering: "pixelated",
+        width: "auto", height: "auto", maxWidth: "none" };
+  return (
+    <div ref={wrapRef}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)",
+               zIndex: 1000, display: "flex", flexDirection: "column" }}
+      onPointerDown={(e) => {
+        if (mode !== "100") return;
+        panRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        const p = panRef.current;
+        if (!p) return;
+        setPan({ x: p.px + (e.clientX - p.x), y: p.py + (e.clientY - p.y) });
+      }}
+      onPointerUp={() => { panRef.current = null; }}>
+      <div style={{ display: "flex", gap: 8, padding: 8, color: "#eee",
+                    alignItems: "center", background: "#181c20" }}>
+        <b>camera preview</b>
+        <Btn active={mode === "fit"} onClick={() => { setMode("fit"); setScale(1); setPan({ x: 0, y: 0 }); }}>适应窗口</Btn>
+        <Btn active={mode === "100"} onClick={() => { setMode("100"); setScale(1); setPan({ x: 0, y: 0 }); }}>原始 100%</Btn>
+        <Btn onClick={() => zoomBy(1 / 1.25)}>−</Btn>
+        <span style={{ minWidth: 40 }}>{mode === "fit" ? "fit" : `${(scale * 100).toFixed(0)}%`}</span>
+        <Btn onClick={() => zoomBy(1.25)}>＋</Btn>
+        <Btn onClick={onClose}>关闭 (Esc)</Btn>
+      </div>
+      <div style={{ flex: 1, overflow: "hidden", display: "flex",
+                    alignItems: "center", justifyContent: "center" }}>
+        <img src={url} style={imgStyle} alt="camera preview" draggable={false} />
+      </div>
+    </div>
+  );
+}
+
 /* ---------------------------------- app ----------------------------------- */
 
 type Tool = "select" | "add_box" | "add_cylinder" | "add_car" | "add_arrow"
@@ -95,6 +162,15 @@ function App() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const panRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  // absolute sizes/scales at gizmo-drag start: TransformControls scale is
+  // RELATIVE to proxy creation, and the proxy now persists through the
+  // drag (deferred rebuild), so every objectChange must compute the
+  // ABSOLUTE value from this snapshot (review: repeated multiplication
+  // blew sizes up to 5674x)
+  const dragStartRef = useRef<{
+    objectSizes: Record<string, [number, number, number]>;
+    arrowScales: Record<number, number>;
+  } | null>(null);
   const previewWrap = useRef<HTMLDivElement>(null);
   const zoomBy = (f: number) => setZoom((z) => Math.min(8, Math.max(1, z * f)));
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
@@ -164,6 +240,14 @@ function App() {
           undoStack.current.push(JSON.stringify(cur));
           if (undoStack.current.length > 100) undoStack.current.shift();
           redoStack.current = [];
+          // absolute sizes at drag start for the scale write-back
+          dragStartRef.current = {
+            objectSizes: Object.fromEntries(
+              cur.objects.map((o) => [o.object_id,
+                [...(o.size_abc ?? [1, 1, 1])] as [number, number, number]])),
+            arrowScales: Object.fromEntries(
+              cur.arrows.map((a) => [a.instance_id, a.scale])),
+          };
           return cur;
         });
       },
@@ -177,19 +261,25 @@ function App() {
         if (!dragged) return;
         setScene((prev) => {
           const next = JSON.parse(JSON.stringify(prev)) as SceneV1;
+          const ds = dragStartRef.current;
           if (s.kind === "object") {
             const o = next.objects.find((o) => o.object_id === (s as { id: string }).id);
             if (o) {
               o.center_ego = [t.pos[0], t.pos[1], t.pos[2]];
               o.yaw_rad = t.rotZ;
-              if (o.size_abc && t.scale.some((v) => v !== 1)) {
-                // per-axis gizmo scale multiplies each object dimension
+              const startSize = ds?.objectSizes[(s as { id: string }).id]
+                ?? o.size_abc ?? [1, 1, 1];
+              if (o.size_abc && t.scale.some((v) => Math.abs(v - 1) > 1e-9)) {
+                // ABSOLUTE size = drag-start size * cumulative proxy scale
+                // (proxy scale is relative to drag start, not per-event)
                 const [sx, sy, sz] = t.scale;
                 o.size_abc = [
-                  Math.max(0.05, o.size_abc[0] * sx),
-                  Math.max(0.05, o.size_abc[1] * sy),
-                  Math.max(0.05, o.size_abc[2] * sz),
+                  Math.max(0.05, startSize[0] * sx),
+                  Math.max(0.05, startSize[1] * sy),
+                  Math.max(0.05, startSize[2] * sz),
                 ];
+              } else if (o.size_abc) {
+                o.size_abc = startSize;
               }
             }
           } else if (s.kind === "arrow") {
@@ -197,11 +287,14 @@ function App() {
             if (a) {
               a.center_ego = [t.pos[0], t.pos[1], 0];
               a.yaw_rad = t.rotZ;
-              // arrows keep aspect ratio: uniform scale from the geometric
-              // mean of the gizmo axes (design doc 5.2)
-              if (t.scale.some((v) => v !== 1)) {
+              const startScale = ds?.arrowScales[
+                (s as { instanceId: number }).instanceId] ?? a.scale;
+              if (t.scale.some((v) => Math.abs(v - 1) > 1e-9)) {
+                // uniform ABSOLUTE scale (aspect ratio preserved, 5.2)
                 const g = Math.cbrt(t.scale[0] * t.scale[1] * t.scale[2]);
-                a.scale = Math.max(0.1, a.scale * g);
+                a.scale = Math.max(0.1, startScale * g);
+              } else {
+                a.scale = startScale;
               }
             }
           } else if (s.kind === "lane_line_point") {
@@ -284,6 +377,8 @@ function App() {
   useEffect(() => { vpRef.current?.setTopView(topView); }, [topView]);
 
   /* ------------------------------ preview cam ------------------------------ */
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const refreshPreview = useCallback(async () => {
     const camId = scene.cameras[previewCam]?.camera_id;
     if (!camId || !previewCanvas.current) return;
@@ -297,12 +392,65 @@ function App() {
       const data = await res.json();
       const { rgb, bev } = data as { rgb: { w: number; h: number; b64: string }; bev?: { w: number; h: number; b64: string } };
       drawB64(previewCanvas.current, rgb);
+      setPreviewUrl(previewCanvas.current.toDataURL("image/png"));
       if (bev && bevCanvas.current) drawB64(bevCanvas.current, bev, true);
       setStatus("preview updated");
     } catch (e) {
       setStatus(`preview error: ${e}`);
     }
   }, [scene, previewCam]);
+
+  /** Camera "look" drag on the preview at 1x: dx -> yaw, dy -> pitch.
+   *  Pushes ONE undo snapshot per gesture like the 3D gizmo. */
+  const lookRef = useRef<{ x: number; y: number; yaw: number; pitch: number;
+                           pushed: boolean } | null>(null);
+  const lookDrag = (e: React.PointerEvent) => {
+    if (zoom > 1) return; // zoomed: pointer drag pans instead
+    const cal = scene.cameras[previewCam];
+    if (!cal) return;
+    lookRef.current = {
+      x: e.clientX, y: e.clientY,
+      yaw: Math.atan2(-cal.T_C_E[0][1], cal.T_C_E[0][0]),
+      pitch: -Math.asin(-cal.T_C_E[1][0]),
+      pushed: false,
+    };
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const lookMove = (e: React.PointerEvent) => {
+    const st = lookRef.current;
+    if (!st) return;
+    if (!st.pushed) {
+      // one undo snapshot per look gesture
+      setScene((cur) => {
+        undoStack.current.push(JSON.stringify(cur));
+        if (undoStack.current.length > 100) undoStack.current.shift();
+        redoStack.current = [];
+        return cur;
+      });
+      st.pushed = true;
+    }
+    const cal = scene.cameras[previewCam];
+    if (!cal) return;
+    const dx = e.clientX - st.x, dy = e.clientY - st.y;
+    const yaw = st.yaw - dx * 0.003;   // drag right -> look right
+    const pitch = st.pitch + dy * 0.003; // drag down -> look down
+    const pos = cameraPos(cal);
+    // no per-move undo: the gesture pushed a single snapshot on start
+    patchCameraPose(cal.camera_id, pitch, yaw, pos, false);
+  };
+  const lookEnd = () => { lookRef.current = null; };
+  const patchCameraPose = (cameraId: string, pitchDeg: number,
+                           yawRad: number, pos: [number, number, number],
+                           withUndo = true) => {
+    const apply = (prev: SceneV1): SceneV1 => {
+      const next = JSON.parse(JSON.stringify(prev)) as SceneV1;
+      const cal = next.cameras.find((c) => c.camera_id === cameraId);
+      if (cal) cal.T_C_E = tceFromPitchYaw(pitchDeg, yawRad, pos);
+      return next;
+    };
+    if (withUndo) commit(apply);
+    else setScene(apply);  // gesture already pushed one snapshot
+  };
 
   useEffect(() => {
     const t = setTimeout(refreshPreview, 600);
@@ -750,6 +898,7 @@ function App() {
           <span style={{ fontSize: 12, minWidth: 34, textAlign: "center" }}>{zoom.toFixed(1)}×</span>
           <Btn onClick={() => zoomBy(1.5)} title="zoom in">+</Btn>
           <Btn onClick={resetZoom} title="reset zoom/pan">reset</Btn>
+          <Btn onClick={() => setViewerOpen(true)} title="open fullscreen viewer">⤢ 大图</Btn>
         </div>
         <div
           ref={previewWrap}
@@ -757,17 +906,21 @@ function App() {
                    overflow: "hidden", border: "1px solid #333", marginTop: 6,
                    cursor: zoom > 1 ? "grab" : "default" }}
           onPointerDown={(e) => {
-            if (zoom <= 1) return;
+            if (zoom <= 1) { lookDrag(e); return; }
             panRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
             (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
           }}
           onPointerMove={(e) => {
             const p = panRef.current;
-            if (!p) return;
-            setPan({ x: p.px + (e.clientX - p.x), y: p.py + (e.clientY - p.y) });
+            if (p) {
+              setPan({ x: p.px + (e.clientX - p.x), y: p.py + (e.clientY - p.y) });
+              return;
+            }
+            if (lookRef.current) lookMove(e);
           }}
-          onPointerUp={() => { panRef.current = null; }}
+          onPointerUp={() => { panRef.current = null; lookEnd(); }}
           onDoubleClick={resetZoom}
+          title="drag: aim camera (1x) / pan (zoomed); wheel: zoom"
         >
           <canvas ref={previewCanvas} style={{
             width: "100%", height: "100%", display: "block",
@@ -776,6 +929,12 @@ function App() {
             transformOrigin: "0 0",
           }} />
         </div>
+        {viewerOpen && previewUrl && (
+          <FullscreenViewer
+            url={previewUrl}
+            onClose={() => setViewerOpen(false)}
+          />
+        )}
         {showBevLayer && <>
           <div style={{ fontSize: 11, color: "#9ab", marginTop: 6 }}>BEV instance layer (row0=far, col0=left)</div>
           <canvas ref={bevCanvas} style={{ width: "100%", border: "1px solid #333", imageRendering: "pixelated" }} />

@@ -26,6 +26,107 @@ DIST = REPO / "web" / "dist"
 HAVE = (DIST / "index.html").exists() and BROWSER is not None
 
 
+def _cam_pos_from_T(T):
+    R = [[T[0][0], T[0][1], T[0][2]],
+         [T[1][0], T[1][1], T[1][2]],
+         [T[2][0], T[2][1], T[2][2]]]
+    t = [T[0][3], T[1][3], T[2][3]]
+    return [-sum(R[k][i] * t[k] for k in range(3)) for i in range(3)]
+
+
+
+
+@pytest.mark.skipif(not HAVE, reason="web/dist or browser missing")
+def test_scale_drag_absolute_and_deterministic():
+    """Regression (review): gizmo scale must be ABSOLUTE from the drag
+    start, not multiplied per objectChange (a single drag previously
+    blew a box up to 5674x). Different mouse step counts must give the
+    SAME final size."""
+    from playwright.sync_api import sync_playwright
+    port = _free_port()
+    server = subprocess.Popen(
+        [sys.executable, "-m", "arrow_toy.editor_server",
+         "--host", "127.0.0.1", "--port", str(port)],
+        cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    base = f"http://127.0.0.1:{port}"
+    import urllib.request
+    for _ in range(50):
+        time.sleep(0.3)
+        try:
+            urllib.request.urlopen(f"{base}/api/health", timeout=2)
+            break
+        except Exception:
+            if server.poll() is not None:
+                raise RuntimeError("editor server died")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True, executable_path=str(browser_path()))
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(f"{base}/index.html")
+            page.wait_for_selector("text=arrow-toy", timeout=15000)
+            canvas = page.locator("canvas").first
+            cb = canvas.bounding_box()
+            cw, ch = cb["width"], cb["height"]
+            # place a box at a known spot and select it
+            page.click("button:has-text('+box')")
+            bx, by = cb["x"] + cw * 0.5, cb["y"] + ch * 0.62
+            page.mouse.click(bx, by)
+            page.wait_for_function(
+                "() => document.body.innerText.includes('objects: 1')")
+            page.click("button:has-text('select')")
+            time.sleep(0.4)
+            # project the box center for a deterministic select click
+            snap = lambda: page.evaluate(  # noqa: E731
+                "() => window.__sceneSnapshot()")
+            oc = snap()["objects"][0]["center_ego"]
+            ou, ov = _editor_cam_pixel((oc[0], oc[1], oc[2]), (cw, ch))
+            ox, oy = cb["x"] + ou, cb["y"] + ov
+            page.mouse.click(ox, oy)
+            time.sleep(0.8)
+            page.click("button:has-text('scale')")
+            time.sleep(0.4)
+            s0 = snap()
+            size0 = list(s0["objects"][0]["size_abc"])
+
+            results = []
+            for steps in (5, 20):
+                # undo any previous gesture first
+                if steps != 5:
+                    page.click("button[title='undo']")
+                    time.sleep(0.4)
+                    assert snap()["objects"][0]["size_abc"] == size0
+                hx = ox + 36 * math.cos(math.radians(30))
+                hy = oy - 36 * math.sin(math.radians(30))
+                page.mouse.move(hx, hy)
+                page.mouse.down()
+                page.mouse.move(hx + 44, hy - 26, steps=steps)
+                page.mouse.up()
+                time.sleep(0.8)
+                sz = snap()["objects"][0]["size_abc"]
+                results.append((steps, sz))
+                # sanity: modest drag must NOT explode the size
+                assert sz[0] < size0[0] * 5, (steps, size0, sz)
+                assert abs(sz[1] - size0[1]) < 1e-6
+                assert abs(sz[2] - size0[2]) < 1e-6
+            # determinism: same gesture, different step counts, same size
+            assert abs(results[0][1][0] - results[1][1][0]) < 1e-6, results
+            # actually grew
+            assert results[0][1][0] > size0[0] * 1.02, results
+            # undo restores exactly
+            page.click("button[title='undo']")
+            time.sleep(0.4)
+            assert snap()["objects"][0]["size_abc"] == size0
+            page.click("button[title='redo']")
+            time.sleep(0.4)
+            assert snap()["objects"][0]["size_abc"] == results[0][1]
+            assert not errors, errors
+            browser.close()
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
 
 
 @pytest.mark.skipif(not HAVE, reason="web/dist or browser missing")
@@ -99,6 +200,63 @@ def test_camera_gizmo_and_preview_zoom():
             page.click("button[title='undo']")
             time.sleep(0.5)
             assert snap() == s_before, "undo did not restore camera scene"
+            page.click("button[title='redo']")
+            time.sleep(0.5)
+            s_redo = snap()
+            assert s_redo == s_after, "redo did not reproduce camera drag"
+
+            # --- aim the camera by dragging the PREVIEW at 1x ---
+            cal_before = json.loads(json.dumps(
+                s_redo["cameras"][0]))
+            pv = page.locator("div[style*='aspect-ratio']").first
+            box = pv.bounding_box()
+            mx, my = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            page.mouse.move(mx, my)
+            page.mouse.down()
+            page.mouse.move(mx + 60, my + 24, steps=8)
+            page.mouse.up()
+            time.sleep(0.8)
+            s_look = snap()
+            cal_after = s_look["cameras"][0]
+            # rotation happened: T_C_E changed, K and position unchanged
+            assert cal_after["T_C_E"] != cal_before["T_C_E"], \
+                "look-drag did not rotate the camera"
+            assert cal_after["K"] == cal_before["K"], "K must not change"
+            pa = _cam_pos_from_T(cal_after["T_C_E"])
+            pb = _cam_pos_from_T(cal_before["T_C_E"])
+            assert math.dist(pa, pb) < 1e-9, "position must not change"
+            # one undo returns to the pre-look state
+            page.click("button[title='undo']")
+            time.sleep(0.5)
+            assert snap()["cameras"][0]["T_C_E"] == cal_before["T_C_E"]
+            page.click("button[title='redo']")
+            time.sleep(0.5)
+
+            # --- save / reload keeps the edited calibration exactly ---
+            with page.expect_download() as dl:
+                page.click("button:has-text('save')")
+            saved = pathlib.Path(dl.value.path())
+            saved_scene = json.loads(saved.read_text())
+            assert saved_scene["cameras"][0]["T_C_E"] == \
+                snap()["cameras"][0]["T_C_E"], "saved matrix drifted"
+
+            # --- fullscreen viewer: open, modes, Esc ---
+            page.click("button[title='open fullscreen viewer']")
+            time.sleep(0.4)
+            overlay = page.locator("div[style*='fixed']")
+            assert overlay.first.is_visible()
+            img = page.locator("img[alt='camera preview']")
+            assert img.is_visible()
+            page.click("button:has-text('原始 100%')")
+            time.sleep(0.2)
+            page.click("button:has-text('适应窗口')")
+            time.sleep(0.2)
+            page.keyboard.press("Escape")
+            time.sleep(0.3)
+            assert not img.is_visible(), "Esc must close the viewer"
+            # calibration untouched by viewing
+            assert snap()["cameras"][0]["T_C_E"] == \
+                saved_scene["cameras"][0]["T_C_E"]
 
             # --- preview zoom ---
             preview = page.locator(

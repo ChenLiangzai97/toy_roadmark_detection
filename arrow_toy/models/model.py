@@ -40,6 +40,14 @@ class ArrowToyModel(nn.Module):
         else:
             self.adapter = None
         self.hidden = hidden
+        # optional auxiliary dense heatmap head on the SAME BEV tokens
+        # (experiment F: auxiliary dense supervision to accelerate the
+        # sparse head's convergence; primary head remains 32-query)
+        self.aux_dense = None
+        if m.get("aux_dense", False):
+            from arrow_toy.models.dense_head import DenseHeatmapHead
+            self.aux_dense = DenseHeatmapHead(
+                hidden, bev_hw, bev_range)
 
     def forward(self, images: torch.Tensor, K: torch.Tensor,
                 T_C_E: torch.Tensor,
@@ -53,7 +61,10 @@ class ArrowToyModel(nn.Module):
         pe = self.bev_encoder.position_encoding(bev_feats.device)
         assert pe.shape[-1] == bev_feats.shape[-1], \
             f"position encoding C={pe.shape[-1]} != bev C={bev_feats.shape[-1]}"
-        return self.arrow_head(bev_feats, bev_valid, pe)
+        out = self.arrow_head(bev_feats, bev_valid, pe)
+        if self.aux_dense is not None:
+            out["aux_dense"] = self.aux_dense(bev_feats)
+        return out
 
 
 def count_parameters(model: nn.Module) -> dict[str, int]:
