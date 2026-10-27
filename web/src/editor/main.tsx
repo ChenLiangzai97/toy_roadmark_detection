@@ -92,6 +92,24 @@ function App() {
   const [status, setStatus] = useState("ready");
   const [previewCam, setPreviewCam] = useState(0);
   const [showBevLayer, setShowBevLayer] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const previewWrap = useRef<HTMLDivElement>(null);
+  const zoomBy = (f: number) => setZoom((z) => Math.min(8, Math.max(1, z * f)));
+  const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
+  // native non-passive wheel listener: React's delegated wheel handler is
+  // passive and was observed to miss events after unrelated re-renders
+  useEffect(() => {
+    const el = previewWrap.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((z) => Math.min(8, Math.max(1, z * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
   const [topView, setTopView] = useState(false);
   const [lineDraft, setLineDraft] = useState<number[][] | null>(null);
   const [laneDraft, setLaneDraft] = useState<number[][] | null>(null);
@@ -191,6 +209,20 @@ function App() {
             if (line) {
               const i = (s as { index: number }).index;
               line.points_ego[i] = [t.pos[0], t.pos[1], 0];
+            }
+          } else if (s.kind === "camera") {
+            const camId = (s as { cameraId: string }).cameraId;
+            const cal = next.cameras.find((c) => c.camera_id === camId);
+            if (cal) {
+              // translate -> position; rotate (proxy +x = view dir) ->
+              // yaw/pitch; K unchanged (intrinsics stay panel-owned)
+              const pos: [number, number, number] = [
+                t.pos[0], t.pos[1], Math.max(0.2, t.pos[2])];
+              const [fx, fy, fz] = t.forward;
+              const horiz = Math.hypot(fx, fy);
+              const yaw = Math.atan2(fy, fx);
+              const pitch = -Math.atan2(fz, horiz); // down = positive
+              cal.T_C_E = tceFromPitchYaw(pitch, yaw, pos);
             }
           }
           dirtyRef.current = true;
@@ -709,11 +741,41 @@ function App() {
         <h4 style={{ margin: "2px 0 6px" }}>properties</h4>
         {selPanel}
         <h4 style={{ margin: "12px 0 6px" }}>training camera preview</h4>
-        <select value={previewCam} onChange={(e) => setPreviewCam(parseInt(e.target.value))}>
-          {scene.cameras.map((c, i) => <option key={c.camera_id} value={i}>{c.camera_id}</option>)}
-        </select>{" "}
-        <Btn onClick={refreshPreview}>refresh</Btn>
-        <canvas ref={previewCanvas} style={{ width: "100%", border: "1px solid #333", marginTop: 6, imageRendering: "pixelated" }} />
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={previewCam} onChange={(e) => setPreviewCam(parseInt(e.target.value))}>
+            {scene.cameras.map((c, i) => <option key={c.camera_id} value={i}>{c.camera_id}</option>)}
+          </select>
+          <Btn onClick={refreshPreview}>refresh</Btn>
+          <Btn onClick={() => zoomBy(1 / 1.5)} title="zoom out">-</Btn>
+          <span style={{ fontSize: 12, minWidth: 34, textAlign: "center" }}>{zoom.toFixed(1)}×</span>
+          <Btn onClick={() => zoomBy(1.5)} title="zoom in">+</Btn>
+          <Btn onClick={resetZoom} title="reset zoom/pan">reset</Btn>
+        </div>
+        <div
+          ref={previewWrap}
+          style={{ position: "relative", width: "100%", aspectRatio: "320 / 192",
+                   overflow: "hidden", border: "1px solid #333", marginTop: 6,
+                   cursor: zoom > 1 ? "grab" : "default" }}
+          onPointerDown={(e) => {
+            if (zoom <= 1) return;
+            panRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+            (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const p = panRef.current;
+            if (!p) return;
+            setPan({ x: p.px + (e.clientX - p.x), y: p.py + (e.clientY - p.y) });
+          }}
+          onPointerUp={() => { panRef.current = null; }}
+          onDoubleClick={resetZoom}
+        >
+          <canvas ref={previewCanvas} style={{
+            width: "100%", height: "100%", display: "block",
+            imageRendering: "pixelated",
+            transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+            transformOrigin: "0 0",
+          }} />
+        </div>
         {showBevLayer && <>
           <div style={{ fontSize: 11, color: "#9ab", marginTop: 6 }}>BEV instance layer (row0=far, col0=left)</div>
           <canvas ref={bevCanvas} style={{ width: "100%", border: "1px solid #333", imageRendering: "pixelated" }} />

@@ -58,3 +58,34 @@ def browser_path() -> pathlib.Path:
     when missing via the browser marker)."""
     assert BROWSER is not None, SKIP_REASON
     return BROWSER
+
+
+def _editor_cam_pixel(point, canvas_wh):
+    """Project a world point through the editor viewport camera
+    (pos (-12,-12,14), lookAt (10,0,0), up +z, vfov 50 deg)."""
+    import math
+    W, H = canvas_wh
+    pos = (-12.0, -12.0, 14.0)
+    target = (10.0, 0.0, 0.0)
+    up = (0.0, 0.0, 1.0)
+    f = tuple((target[i] - pos[i]) for i in range(3))
+    fl = math.sqrt(sum(v * v for v in f))
+    f = tuple(v / fl for v in f)
+    zc = tuple(-v for v in f)
+    x = (up[1] * zc[2] - up[2] * zc[1],
+         up[2] * zc[0] - up[0] * zc[2],
+         up[0] * zc[1] - up[1] * zc[0])
+    xl = math.sqrt(sum(v * v for v in x))
+    x = tuple(v / xl for v in x)
+    y = (zc[1] * x[2] - zc[2] * x[1],
+         zc[2] * x[0] - zc[0] * x[2],
+         zc[0] * x[1] - zc[1] * x[0])
+    d = tuple(point[i] - pos[i] for i in range(3))
+    X = sum(x[i] * d[i] for i in range(3))
+    Y = sum(y[i] * d[i] for i in range(3))
+    Z = sum(f[i] * d[i] for i in range(3))
+    assert Z > 0
+    fy = (H / 2) / math.tan(math.radians(50) / 2)
+    u = fy * X / Z + W / 2
+    v = -fy * Y / Z + H / 2
+    return u, v

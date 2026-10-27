@@ -82,9 +82,15 @@ export class ThreeViewport {
     this.gizmo.addEventListener("dragging-changed", (e) => {
       const on = (e as unknown as { value: boolean }).value;
       this.controls.enabled = !on;
+      this.draggingNow = on;
       if (on) {
         this.dragCount += 1;
         this.cb.onDragStart?.();
+      } else if (this.pendingScene) {
+        // apply the scene that arrived mid-drag once the drag ends
+        const sc = this.pendingScene;
+        this.pendingScene = null;
+        this.setScene(sc);
       }
     });
     this.gizmo.addEventListener("objectChange", () => this.cb.onTransform());
@@ -99,6 +105,8 @@ export class ThreeViewport {
   }
 
   private dragCount = 0;
+  private draggingNow = false;
+  private pendingScene: SceneV1 | null = null;
 
   wasDragged(): boolean {
     return this.dragCount > 0;
@@ -178,8 +186,15 @@ export class ThreeViewport {
     this.cb.onSelect(null);
   }
 
-  /** Rebuild view from scene JSON. */
+  /** Rebuild view from scene JSON. During a gizmo drag the rebuild is
+   *  DEFERRED: recreating meshes/rebinding the gizmo mid-drag detaches
+   *  the dragged proxy and freezes the write-back (intermittent
+   *  "drag did not move" failures). */
   setScene(scene: SceneV1) {
+    if (this.draggingNow) {
+      this.pendingScene = scene;
+      return;
+    }
     if (this.built) {
       this.scene.remove(this.built.root);
       this.built.root.traverse((o) => {
@@ -281,6 +296,7 @@ export class ThreeViewport {
   /** Attach gizmo to a temporary proxy object mirroring the selection. */
   private proxy: THREE.Object3D | null = null;
   rebindGizmo(scene: SceneV1) {
+    if (this.draggingNow) return; // never detach a proxy mid-drag
     const gizmoHelper = this.gizmo.getHelper?.() ?? (this.gizmo as unknown as THREE.Object3D);
     if (this.proxy) {
       this.scene.remove(this.proxy);
@@ -313,8 +329,27 @@ export class ThreeViewport {
       p.position.set(pt[0], pt[1], pt[2] + 0.02);
       p.userData = { lockZ: true };
       this.attachProxy(p, gizmoHelper);
+    } else if (this.sel.kind === "camera") {
+      // gizmo on the camera: translate moves it, rotate aims it.
+      // The proxy's local +x axis IS the view direction, so any rotation
+      // drag maps back to yaw/pitch (design: pitch-down + yaw only).
+      const cal = scene.cameras.find(
+        (c) => c.camera_id === (this.sel as { cameraId: string }).cameraId);
+      if (!cal) return;
+      const inv = new THREE.Matrix4().set(
+        cal.T_C_E[0][0], cal.T_C_E[0][1], cal.T_C_E[0][2], cal.T_C_E[0][3],
+        cal.T_C_E[1][0], cal.T_C_E[1][1], cal.T_C_E[1][2], cal.T_C_E[1][3],
+        cal.T_C_E[2][0], cal.T_C_E[2][1], cal.T_C_E[2][2], cal.T_C_E[2][3],
+        cal.T_C_E[3][0], cal.T_C_E[3][1], cal.T_C_E[3][2], cal.T_C_E[3][3]
+      ).invert();
+      const pos = new THREE.Vector3(0, 0, 0).applyMatrix4(inv);
+      const rot = new THREE.Matrix4().extractRotation(inv);
+      const fwd = new THREE.Vector3(0, 0, 1).applyMatrix4(rot).normalize();
+      const p = new THREE.Object3D();
+      p.position.copy(pos);
+      p.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), fwd);
+      this.attachProxy(p, gizmoHelper);
     }
-    // camera selection: no gizmo (edit numerically / via pose helper)
   }
 
   private attachProxy(p: THREE.Object3D, gizmoHelper: THREE.Object3D) {
@@ -334,12 +369,18 @@ export class ThreeViewport {
   }
 
   getProxyTransform(): { pos: [number, number, number]; rotZ: number;
-                          scale: [number, number, number] } | null {
+                          scale: [number, number, number];
+                          forward: [number, number, number] } | null {
     if (!this.proxy) return null;
+    this.proxy.updateMatrixWorld();
+    const fwd = new THREE.Vector3(1, 0, 0)
+      .applyQuaternion(this.proxy.getWorldQuaternion(
+        new THREE.Quaternion())).normalize();
     return {
       pos: [this.proxy.position.x, this.proxy.position.y, this.proxy.position.z],
       rotZ: this.proxy.rotation.z,
       scale: [this.proxy.scale.x, this.proxy.scale.y, this.proxy.scale.z],
+      forward: [fwd.x, fwd.y, fwd.z],
     };
   }
 

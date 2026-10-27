@@ -20,7 +20,7 @@ import numpy as np
 from PIL import Image
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-from conftest import BROWSER, SKIP_REASON, browser_path
+from conftest import BROWSER, SKIP_REASON, browser_path, _editor_cam_pixel
 
 DIST = REPO / "web" / "dist"
 CHROME = browser_path()
@@ -291,21 +291,42 @@ def test_editor_full_flow(tmp_path):
                     "() => window.__sceneSnapshot()")
 
             s_before = snap()
-            # click the arrow (it sits where placed) to attach the gizmo
-            page2.mouse.click(cx, cy)
+            # select the arrow at its PROJECTED position (a fixed canvas
+            # fraction was marginal and missed the thin foreshortened
+            # mesh on some runs)
+            ac = s_before["arrows"][0]["center_ego"]
+            cb2 = page2.locator("canvas").first.bounding_box()
+            au, av = _editor_cam_pixel((ac[0], ac[1], 0.0),
+                                       (cb2["width"], cb2["height"]))
+            ax, ay = cb2["x"] + au, cb2["y"] + av
+            page2.mouse.click(ax, ay)
             time.sleep(0.6)
             # drag from the gizmo center (plane/XYZ handle) -- reliably
             # pickable; axis tips are too small for synthetic drags
-            page2.mouse.move(cx, cy)
+            page2.mouse.move(ax, ay)
             page2.mouse.down()
-            page2.mouse.move(cx + 114, cy + 38, steps=15)
+            page2.mouse.move(ax + 114, ay + 38, steps=15)
             page2.mouse.up()
             time.sleep(0.6)
             s_dragged = snap()
             a0 = s_before["arrows"][0]
             a1 = s_dragged["arrows"][0]
             moved = math.dist(a0["center_ego"][:2], a1["center_ego"][:2])
-            assert moved > 0.1, f"drag did not move the arrow ({moved:.3f} m)"
+            if moved <= 0.1:
+                body = page2.inner_text("body")
+                i = body.find("properties")
+                panel = body[i:i + 80].replace("\n", "|")
+                ac = a0["center_ego"]
+                cb2 = page2.locator("canvas").first.bounding_box()
+                upx, upy = _editor_cam_pixel(
+                    (ac[0], ac[1], 0.0),
+                    (cb2["width"], cb2["height"]))
+                raise AssertionError(
+                    f"drag did not move the arrow ({moved:.3f} m); "
+                    f"panel: {panel}; arrow center: "
+                    f"{[round(v, 2) for v in ac]}; projected px in canvas: "
+                    f"({upx:.0f},{upy:.0f}); click was at "
+                    f"({cx - cb2['x']:.0f},{cy - cb2['y']:.0f})")
 
             page2.click("button[title='undo']")
             time.sleep(0.4)
@@ -346,16 +367,21 @@ def test_editor_full_flow(tmp_path):
                 "() => window.__sceneSnapshot()")
             ob_before = snap3()["objects"][0]
             size_before = list(ob_before["size_abc"])
-            # select the object (placed left-below the arrow), scale mode,
+            # select the object at its projected position, scale mode,
             # drag the X scale handle outward
-            page3.mouse.click(cx - 200, cy + 80)
+            oc = snap3()["objects"][0]["center_ego"]
+            cb3 = page3.locator("canvas").first.bounding_box()
+            ou, ov = _editor_cam_pixel((oc[0], oc[1], oc[2]),
+                                       (cb3["width"], cb3["height"]))
+            ox, oy = cb3["x"] + ou, cb3["y"] + ov
+            page3.mouse.click(ox, oy)
             time.sleep(0.6)
             page3.click("button:has-text('scale')")
             time.sleep(0.3)
             # X scale handle located at r=36px, 30 deg above horizontal
             # (probe-verified on this gizmo size / camera)
-            hx = cx - 200 + 36 * math.cos(math.radians(30))
-            hy = cy + 80 - 36 * math.sin(math.radians(30))
+            hx = ox + 36 * math.cos(math.radians(30))
+            hy = oy - 36 * math.sin(math.radians(30))
             page3.mouse.move(hx, hy)
             page3.mouse.down()
             page3.mouse.move(hx * 1 + 44, hy - 26, steps=15)
