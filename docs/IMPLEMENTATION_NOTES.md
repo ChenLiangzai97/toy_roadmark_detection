@@ -333,7 +333,9 @@ data_version a065b96fe99c9dbd, all runs budget-capped 600 s)
   ROLL. test_pose regenerated with true world yaw (deterministic seeds,
   200 samples re-rendered), manifest splits restored, audit re-passed,
   caches rebuilt -> data_version now 56384bb9427e5a1c. Earlier run
-  artifacts keep their recorded versions (a065b96...); re-evaluating
-  them against the new data version is intentionally blocked by the
-  gate until caches are rebuilt per-run (train/val arrays are
-  unchanged, only the version stamp differs).
+  artifacts keep their recorded versions (a065b96...). NOTE (review
+  correction): the dataset gate checks the CACHE version against the
+  CURRENT dataset version - it does NOT compare a run's TRAINING-time
+  version during evaluation. Old results are preserved as-is; any new
+  evaluation runs on the current data version and must say so
+  explicitly (train/val arrays are unchanged; only test_pose differs).

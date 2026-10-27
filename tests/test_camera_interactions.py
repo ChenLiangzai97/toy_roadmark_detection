@@ -219,8 +219,35 @@ def test_camera_gizmo_and_preview_zoom():
 
             yaw0, pitch0 = pose_of(cal_before["T_C_E"])
 
-            # SMALL drag first: continuity, no 90-degree jump (the old
-            # extraction mis-read yaw=0 as 90deg and jumped on first move)
+            # DEFAULT-pose round trip (world-frame contract): the panel's
+            # displayed yaw/pitch decode the default as 0 deg / 12 deg,
+            # NOT 90 deg / -12 deg (the old extraction bug)
+            disp_yaw = float(page.locator(
+                "label:has-text('yaw (deg)') input").input_value())
+            disp_pitch = float(page.locator(
+                "label:has-text('pitch down (deg)') input").input_value())
+            assert abs(disp_yaw - 0.0) < 0.5, \
+                f"default pose decoded yaw as {disp_yaw} deg (want 0)"
+            assert abs(disp_pitch - 12.0) < 0.5, \
+                f"default pose decoded pitch as {disp_pitch} deg (want 12)"
+
+            # PANEL yaw edit -> optical axis (direct TS construction check):
+            # set yaw to 0.6 rad (34.38 deg) and verify row 2 of T
+            page.locator("label:has-text('yaw (deg)') input").fill("34.377468")
+            time.sleep(0.6)
+            yawed = snap()["cameras"][0]
+            alpha = math.radians(12)
+            f_expect = (math.cos(alpha) * math.cos(0.6),
+                        math.cos(alpha) * math.sin(0.6),
+                        -math.sin(alpha))
+            f_got = yawed["T_C_E"][2][:3]
+            for a_, b_ in zip(f_expect, f_got):
+                assert a_ == pytest.approx(b_, abs=1e-6), (f_expect, f_got)
+            page.click("button[title='undo']")
+            time.sleep(0.5)
+            assert snap()["cameras"][0]["T_C_E"] == cal_before["T_C_E"]
+
+            # SMALL drag: continuity at 0.003 rad/px, no 90-degree jump
             page.mouse.move(mx, my)
             page.mouse.down()
             page.mouse.move(mx + 10, my + 2, steps=4)
@@ -230,10 +257,10 @@ def test_camera_gizmo_and_preview_zoom():
             yaw_s, pitch_s = pose_of(small["T_C_E"])
             dyaw = math.atan2(math.sin(yaw_s - yaw0), math.cos(yaw_s - yaw0))
             dpitch = pitch_s - pitch0
-            assert abs(dyaw - (-10 * 0.003)) < 0.01, \
-                f"small yaw drag moved {dyaw:.3f} rad (want ~-0.03)"
-            assert abs(dpitch - 2 * 0.003) < 0.01, \
-                f"small pitch drag moved {dpitch:.3f} rad (want ~0.006)"
+            assert abs(dyaw - (-10 * 0.003)) < 0.002, \
+                f"small yaw drag moved {dyaw:.4f} rad (want -0.030)"
+            assert abs(dpitch - 2 * 0.003) < 0.002, \
+                f"small pitch drag moved {dpitch:.4f} rad (want 0.006)"
             page.click("button[title='undo']")
             time.sleep(0.5)
 
