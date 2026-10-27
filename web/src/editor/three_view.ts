@@ -67,6 +67,22 @@ export class ThreeViewport {
     bevBox.name = "bev_range";
     this.scene.add(bevBox);
 
+    // ground grid (GridHelper is XZ; rotate onto the z-up ground plane)
+    const grid = new THREE.GridHelper(60, 60, 0x3a4048, 0x2a2f36);
+    grid.rotation.x = Math.PI / 2;
+    grid.position.set(10, 0, 0.005);
+    grid.name = "ground_grid";
+    this.scene.add(grid);
+
+    // ego coordinate axes triad at the origin (x fwd red-ish, y left
+    // green-ish, z up blue-ish, 1.5 m)
+    const axes = new THREE.AxesHelper(1.5);
+    axes.position.set(0, 0, 0.01);
+    axes.name = "ego_axes";
+    this.scene.add(axes);
+    this.gridVisible = true;
+    this.axesVisible = true;
+
     this.camera = new THREE.PerspectiveCamera(
       50, dom.clientWidth / dom.clientHeight, 0.1, 500
     );
@@ -382,6 +398,47 @@ export class ThreeViewport {
       scale: [this.proxy.scale.x, this.proxy.scale.y, this.proxy.scale.z],
       forward: [fwd.x, fwd.y, fwd.z],
     };
+  }
+
+  private gridVisible = true;
+  private axesVisible = true;
+
+  setHelpers(grid: boolean | null, axes: boolean | null) {
+    if (grid !== null) {
+      this.gridVisible = grid;
+      const g = this.scene.getObjectByName("ground_grid");
+      if (g) g.visible = grid;
+    }
+    if (axes !== null) {
+      this.axesVisible = axes;
+      const a = this.scene.getObjectByName("ego_axes");
+      if (a) a.visible = axes;
+    }
+  }
+
+  /** Frame the current scene: aim the orbit camera at the BEV area. */
+  focusScene(scene: SceneV1 | null = null) {
+    let cx = 10, cy = 0, radius = 9;
+    if (scene && (scene.arrows.length || scene.objects.length)) {
+      const pts: number[][] = [];
+      for (const a of scene.arrows) pts.push(a.center_ego as number[]);
+      for (const o of scene.objects) pts.push(o.center_ego as number[]);
+      cx = pts.reduce((m, p) => m + p[0], 0) / pts.length;
+      cy = pts.reduce((m, p) => m + p[1], 0) / pts.length;
+      radius = Math.max(4, ...pts.map((p) =>
+        Math.hypot(p[0] - cx, p[1] - cy))) + 3;
+    }
+    this.camera.position.set(cx - radius * 0.9, cy - radius * 0.9,
+                             radius * 1.1);
+    this.controls.target.set(cx, cy, 0);
+    this.controls.update();
+  }
+
+  /** Restore the default editor viewpoint. */
+  resetView() {
+    this.camera.position.set(-12, -12, 14);
+    this.controls.target.set(10, 0, 0);
+    this.controls.update();
   }
 
   setTopView(on: boolean) {

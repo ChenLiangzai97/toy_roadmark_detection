@@ -118,13 +118,13 @@ def test_editor_full_flow(tmp_path):
             assert _stats(page) == {"arrows": 0, "objects": 0, "lines": 0,
                                     "lanes": 0, "cameras": 1}
 
-            canvas = page.locator("canvas").first
+            canvas = page.locator("[data-testid=view3d]")
             box = canvas.bounding_box()
             assert box
             cx, cy = box["x"] + box["width"] * 0.55, box["y"] + box["height"] * 0.55
 
             # place an arrow and an object
-            page.click("button:has-text('+arrow')")
+            page.click("button:has-text('直行')")
             page.mouse.click(cx, cy)
             page.wait_for_function(
                 "() => document.body.innerText.includes('arrows: 1')")
@@ -162,13 +162,13 @@ def test_editor_full_flow(tmp_path):
 
             # camera preview renders through the live server
             page.wait_for_function(
-                "() => { const c = document.querySelectorAll('canvas')[1];"
+                "() => { const c = document.querySelector('[data-testid=preview-canvas]');"
                 " return c && c.width === 320 && c.height === 192; }",
                 timeout=30000)
 
             # save scene json via download
             with page.expect_download() as dl:
-                page.click("button:has-text('save')")
+                page.click("button:has-text('保存')")
             saved_path = pathlib.Path(dl.value.path())
             saved = json.loads(saved_path.read_text())
             assert saved["schema_version"] == 1
@@ -189,7 +189,7 @@ def test_editor_full_flow(tmp_path):
             page2.goto(f"{base}/index.html")
             page2.wait_for_selector("text=arrow-toy")
             page2.once("filechooser", lambda fc: fc.set_files(str(saved_path)))
-            page2.click("button:has-text('load')")
+            page2.click("button:has-text('导入')")
             page2.wait_for_function(
                 "() => document.body.innerText.includes('arrows: 1') "
                 "&& document.body.innerText.includes('objects: 1') "
@@ -225,7 +225,7 @@ def test_editor_full_flow(tmp_path):
                 f = tmp_path / f"bad_{name}.json"
                 f.write_text(json.dumps(payload))
                 page2.once("filechooser", lambda fc, f=f: fc.set_files(str(f)))
-                page2.click("button:has-text('load')")
+                page2.click("button:has-text('导入')")
                 page2.wait_for_function(
                     "() => document.body.innerText.includes('invalid scene')"
                     " || document.body.innerText.includes('unknown schema_version')",
@@ -239,13 +239,13 @@ def test_editor_full_flow(tmp_path):
             preview_png = tmp_path / "preview_expected.png"
             _offline_preview(saved, preview_png)
             expected = _load_rgba(preview_png)
-            page2.click("button:has-text('refresh')")
+            page2.click("button:has-text('刷新')")
             page2.wait_for_function(
                 "() => document.body.innerText.includes('preview updated')",
                 timeout=30000)
             time.sleep(0.3)
             got = page2.evaluate(
-                "() => { const c = document.querySelectorAll('canvas')[1];"
+                "() => { const c = document.querySelector('[data-testid=preview-canvas]');"
                 " const ctx = c.getContext('2d');"
                 " return Array.from(ctx.getImageData(0, 0, c.width, c.height).data); }")
             got = np.asarray(got, dtype=np.uint8)
@@ -295,7 +295,7 @@ def test_editor_full_flow(tmp_path):
             # fraction was marginal and missed the thin foreshortened
             # mesh on some runs)
             ac = s_before["arrows"][0]["center_ego"]
-            cb2 = page2.locator("canvas").first.bounding_box()
+            cb2 = page2.locator("[data-testid=view3d]").bounding_box()
             au, av = _editor_cam_pixel((ac[0], ac[1], 0.0),
                                        (cb2["width"], cb2["height"]))
             ax, ay = cb2["x"] + au, cb2["y"] + av
@@ -317,7 +317,7 @@ def test_editor_full_flow(tmp_path):
                 i = body.find("properties")
                 panel = body[i:i + 80].replace("\n", "|")
                 ac = a0["center_ego"]
-                cb2 = page2.locator("canvas").first.bounding_box()
+                cb2 = page2.locator("[data-testid=view3d]").bounding_box()
                 upx, upy = _editor_cam_pixel(
                     (ac[0], ac[1], 0.0),
                     (cb2["width"], cb2["height"]))
@@ -341,7 +341,7 @@ def test_editor_full_flow(tmp_path):
             # save the redone scene and reopen it in a fresh page: the arrow
             # must keep the dragged position
             with page2.expect_download() as dl2:
-                page2.click("button:has-text('save')")
+                page2.click("button:has-text('保存')")
             p3 = pathlib.Path(dl2.value.path())
             reopened = json.loads(p3.read_text())
             assert math.dist(reopened["arrows"][0]["center_ego"][:2],
@@ -353,7 +353,7 @@ def test_editor_full_flow(tmp_path):
             page3.goto(f"{base}/index.html")
             page3.wait_for_selector("text=arrow-toy")
             page3.once("filechooser", lambda fc: fc.set_files(str(p3)))
-            page3.click("button:has-text('load')")
+            page3.click("button:has-text('导入')")
             page3.wait_for_function(
                 "() => document.body.innerText.includes('loaded ')"
                 " || document.body.innerText.includes('invalid scene')"
@@ -370,7 +370,7 @@ def test_editor_full_flow(tmp_path):
             # select the object at its projected position, scale mode,
             # drag the X scale handle outward
             oc = snap3()["objects"][0]["center_ego"]
-            cb3 = page3.locator("canvas").first.bounding_box()
+            cb3 = page3.locator("[data-testid=view3d]").bounding_box()
             ou, ov = _editor_cam_pixel((oc[0], oc[1], oc[2]),
                                        (cb3["width"], cb3["height"]))
             ox, oy = cb3["x"] + ou, cb3["y"] + ov

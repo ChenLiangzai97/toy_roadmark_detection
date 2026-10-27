@@ -51,7 +51,7 @@ def test_object_library_and_panel_resize():
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(f"{base}/index.html")
             page.wait_for_selector("text=arrow-toy", timeout=15000)
-            canvas = page.locator("canvas").first
+            canvas = page.locator("[data-testid=view3d]")
             cb = canvas.bounding_box()
             cx, cy = cb["x"] + cb["width"] * 0.5, cb["y"] + cb["height"] * 0.55
 
@@ -77,7 +77,7 @@ def test_object_library_and_panel_resize():
 
             # save -> schema-valid scene with the new shapes
             with page.expect_download() as dl:
-                page.click("button:has-text('save')")
+                page.click("button:has-text('保存')")
             saved = json.loads(pathlib.Path(dl.value.path()).read_text())
             import jsonschema
             schema = json.loads(
@@ -101,13 +101,9 @@ def test_object_library_and_panel_resize():
             # resizable side panel: drag the splitter left/right
             def panel_width():
                 return page.evaluate(
-                    "() => { let best = 0;"
-                    " for (const e of document.querySelectorAll('div')) {"
-                    "  if (e.textContent && e.textContent.includes("
-                    "'training camera preview')) {"
-                    "   const r = e.getBoundingClientRect();"
-                    "   if (r.width > 150 && (best === 0 || r.width < best))"
-                    "     best = r.width; } } return Math.round(best); }")
+                    "() => Math.round(document.querySelector("
+                    "'[data-testid=props-panel]').getBoundingClientRect()"
+                    ".width)")
             w0 = panel_width()
             splitter = page.locator("div[title='drag to resize panel']")
             sb = splitter.bounding_box()

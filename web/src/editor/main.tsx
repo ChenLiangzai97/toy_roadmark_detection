@@ -7,7 +7,7 @@ import type {
   CameraCalibration, Lane, LaneLine, SceneArrow, SceneObject, SceneV1,
 } from "../shared/types";
 import { CLASS_NAMES } from "../shared/types";
-import { TEMPLATE_IDS } from "../shared/templates";
+import { TEMPLATE_IDS, TEMPLATES } from "../shared/templates";
 import { intrinsicsFromFovV, KFromIntrinsics, defaultCameraTCE } from "../shared/geometry";
 import { ThreeViewport, type SelectionKind } from "./three_view";
 import { validateSceneV1 } from "../shared/validate";
@@ -146,6 +146,101 @@ function FullscreenViewer({ url, onClose }: { url: string; onClose: () => void }
   );
 }
 
+/* ------------------------------- thumbnails -------------------------------- */
+
+function ArrowThumb({ classId, size = 44 }: { classId: number; size?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    const tid = ["straight_v1", "left_v1", "right_v1",
+      "straight_left_v1", "straight_right_v1", "left_right_v1"][classId];
+    const t = TEMPLATES[tid];
+    const pts: [number, number][] = t.primitives.flatMap(
+      (p: { points_ab: [number, number][] }) => p.points_ab);
+    const xs = pts.map((q: [number, number]) => q[0]);
+    const ys = pts.map((q: [number, number]) => q[1]);
+    const w = Math.max(...xs) - Math.min(...xs);
+    const h = Math.max(...ys) - Math.min(...ys);
+    const sc = (size - 8) / Math.max(w, h);
+    const ox = size / 2 - (Math.min(...xs) + w / 2) * sc;
+    const oy = size / 2 + (Math.min(...ys) + h / 2) * sc;
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = "#e8e8e8";
+    for (const prim of t.primitives) {
+      ctx.beginPath();
+      prim.points_ab.forEach(([a, b], i) => {
+        // template +a is the entry/forward direction -> draw it UP
+        const px = ox + a * sc;
+        const py = oy - b * sc;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      ctx.fill();
+    }
+  }, [classId, size]);
+  return <canvas ref={ref} width={size} height={size}
+    style={{ imageRendering: "pixelated", display: "block" }} />;
+}
+
+function ObjectThumb({ shape, size = 36 }: { shape: string; size?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    const c = size / 2;
+    ctx.clearRect(0, 0, size, size);
+    ctx.strokeStyle = "#cfd6de";
+    ctx.fillStyle = "rgba(159,168,180,0.35)";
+    ctx.lineWidth = 1.5;
+    const poly = (pts: number[][]) => {
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => (i ? ctx.lineTo(c + x, c + y)
+        : ctx.moveTo(c + x, c + y)));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    };
+    const r = size * 0.32;
+    if (shape === "box" || shape === "car") {
+      if (shape === "car") {
+        poly([[-r, -r * 0.6], [r * 0.9, -r * 0.6], [r * 0.9, r * 0.6],
+              [-r, r * 0.6]]);
+        poly([[-r * 0.45, -r * 0.45], [r * 0.2, -r * 0.45],
+              [r * 0.2, r * 0.45], [-r * 0.45, r * 0.45]]);
+      } else {
+        poly([[-r * 0.8, -r * 0.8], [r * 0.8, -r * 0.8],
+              [r * 0.8, r * 0.8], [-r * 0.8, r * 0.8]]);
+      }
+    } else if (shape === "cylinder") {
+      ctx.beginPath();
+      ctx.ellipse(c, c - r * 0.5, r * 0.55, r * 0.2, 0, 0, Math.PI * 2);
+      ctx.moveTo(c - r * 0.55, c - r * 0.5);
+      ctx.lineTo(c - r * 0.55, c + r * 0.5);
+      ctx.lineTo(c + r * 0.55, c + r * 0.5);
+      ctx.lineTo(c + r * 0.55, c - r * 0.5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(c, c + r * 0.5, r * 0.55, r * 0.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (shape === "sphere") {
+      ctx.beginPath();
+      ctx.arc(c, c, r * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else if (shape === "cone") {
+      poly([[0, -r * 0.9], [r * 0.75, r * 0.7], [-r * 0.75, r * 0.7]]);
+    }
+  }, [shape, size]);
+  return <canvas ref={ref} width={size} height={size}
+    style={{ display: "block" }} />;
+}
+
 /* ----------------------------- object library ------------------------------ */
 
 interface LibraryEntry {
@@ -209,6 +304,8 @@ function App() {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
   const [topView, setTopView] = useState(false);
+  const [showGrid, setShowGrid] = useState(true);
+  const [showAxes, setShowAxes] = useState(true);
   const [lineDraft, setLineDraft] = useState<number[][] | null>(null);
   const [laneDraft, setLaneDraft] = useState<number[][] | null>(null);
   const [arrowClass, setArrowClass] = useState(0);
@@ -791,38 +888,65 @@ function App() {
 
   /* --------------------------------- render -------------------------------- */
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `190px 1fr 5px ${rightW}px`, height: "100vh", color: "#e8e8e8", fontFamily: "sans-serif", background: "#14171b" }}>
-      {/* toolbar */}
-      <div style={{ borderRight: "1px solid #2a2f36", padding: 8, overflowY: "auto" }}>
-        <h3 style={{ margin: "4px 0" }}>arrow-toy</h3>
-        <Row>
-          <Btn onClick={undo} title="undo">↶</Btn>
-          <Btn onClick={redo} title="redo">↷</Btn>
-          <Btn onClick={() => commit(emptyScene())}>new</Btn>
-        </Row>
-        <Row>
-          <Btn onClick={saveJson}>save</Btn>
-          <Btn onClick={loadJson}>load</Btn>
-        </Row>
-        <hr style={{ borderColor: "#2a2f36" }} />
+    <div style={{ display: "grid",
+                   gridTemplateRows: "42px 1fr 235px",
+                   gridTemplateColumns: `200px 1fr 5px ${rightW}px`,
+                   gridTemplateAreas: `"top top top top" "side view split panel" "dock dock split panel"`,
+                   height: "100vh", color: "#e8e8e8", fontFamily: "sans-serif",
+                   background: "#14171b" }}>
+      {/* top toolbar */}
+      <div style={{ gridArea: "top", display: "flex", alignItems: "center",
+                    gap: 6, padding: "0 10px", borderBottom: "1px solid #2a2f36",
+                    background: "#181c21" }}>
+        <b style={{ marginRight: 8 }}>arrow-toy</b>
+        <Btn onClick={undo} title="undo">↶ 撤销</Btn>
+        <Btn onClick={redo} title="redo">↷ 重做</Btn>
+        <Btn onClick={() => commit(emptyScene())}>新建</Btn>
+        <Btn onClick={saveJson}>保存</Btn>
+        <Btn onClick={loadJson}>导入</Btn>
+        <span style={{ width: 1, height: 22, background: "#2a2f36" }} />
+        <Btn active={topView} onClick={() => setTopView(!topView)}>俯视</Btn>
+        <Btn active={showGrid} onClick={() => { setShowGrid(!showGrid);
+          vpRef.current?.setHelpers(!showGrid, null); }}>网格</Btn>
+        <Btn active={showAxes} onClick={() => { setShowAxes(!showAxes);
+          vpRef.current?.setHelpers(null, !showAxes); }}>坐标轴</Btn>
+        <Btn onClick={() => vpRef.current?.focusScene(scene)}>聚焦</Btn>
+        <Btn onClick={() => vpRef.current?.resetView()}>复位视角</Btn>
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "#8aa" }}>{status}</span>
+      </div>
+      {/* left sidebar: tools */}
+      <div style={{ gridArea: "side", borderRight: "1px solid #2a2f36", padding: 8, overflowY: "auto" }}>
         <div style={{ fontSize: 11, color: "#9ab", marginBottom: 4 }}>tools</div>
         <Row><Btn active={tool === "select"} onClick={() => setTool("select")}>select</Btn></Row>
         <div style={{ fontSize: 11, color: "#9ab", margin: "4px 0" }}>object library</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 4 }}>
-          {OBJECT_LIBRARY.map((entry) => (
-            <Btn key={entry.label} active={tool === "add_object" && libIdx === OBJECT_LIBRARY.indexOf(entry)}
-                 onClick={() => { setTool("add_object"); setLibIdx(OBJECT_LIBRARY.indexOf(entry)); }}
+          {OBJECT_LIBRARY.map((entry, idx) => (
+            <Btn key={entry.label}
+                 active={tool === "add_object" && libIdx === idx}
+                 onClick={() => { setTool("add_object"); setLibIdx(idx); }}
                  title={`${entry.shape} ${entry.size.join("x")}`}>
-              {entry.label}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <ObjectThumb shape={entry.shape} />
+                <span style={{ fontSize: 11 }}>{entry.label}</span>
+              </div>
             </Btn>
           ))}
         </div>
-        <Row>
-          <Btn active={tool === "add_arrow"} onClick={() => setTool("add_arrow")}>+arrow</Btn>
-          <select value={arrowClass} onChange={(e) => setArrowClass(parseInt(e.target.value))}>
-            {CLASS_NAMES.map((n: string, i: number) => <option key={n} value={i}>{n}</option>)}
-          </select>
-        </Row>
+        <div style={{ fontSize: 11, color: "#9ab", margin: "4px 0" }}>arrow</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
+          {CLASS_NAMES.map((n: string, i: number) => (
+            <Btn key={n} title={n}
+                 active={tool === "add_arrow" && arrowClass === i}
+                 onClick={() => { setTool("add_arrow"); setArrowClass(i); }}>
+              <div style={{ display: "flex", flexDirection: "column",
+                            alignItems: "center", gap: 2 }}>
+                <ArrowThumb classId={i} />
+                <span style={{ fontSize: 10 }}>{["直行", "左转", "右转",
+                  "直左", "直右", "左右"][i]}</span>
+              </div>
+            </Btn>
+          ))}
+        </div>
         <Row><Btn active={tool === "draw_line"} onClick={() => { setTool("draw_line"); setLineDraft([]); }}>lane line</Btn></Row>
         {tool === "draw_line" && lineDraft && (
           <div>
@@ -897,8 +1021,7 @@ function App() {
           <Btn active={gizmoMode === "scale"} onClick={() => setGizmoMode("scale")}>scale</Btn>
         </Row>
         <Row>
-          <Btn active={topView} onClick={() => setTopView(!topView)}>top view</Btn>
-          <Btn active={showBevLayer} onClick={() => setShowBevLayer(!showBevLayer)}>bev layer</Btn>
+          <Btn active={showBevLayer} onClick={() => setShowBevLayer(!showBevLayer)}>BEV 层</Btn>
         </Row>
         <hr style={{ borderColor: "#2a2f36" }} />
         <div style={{ fontSize: 11, color: "#9ab" }}>ground</div>
@@ -910,10 +1033,74 @@ function App() {
       </div>
 
       {/* 3D view + drafts */}
-      <div style={{ position: "relative" }}>
-        <div ref={viewDiv} style={{ width: "100%", height: "100%" }} />
+      <div style={{ gridArea: "view", position: "relative" }}>
+        <div ref={viewDiv} data-testid="view3d" style={{ width: "100%", height: "100%" }} />
         <div style={{ position: "absolute", top: 6, left: 8, fontSize: 12, color: "#9ab", pointerEvents: "none" }}>
-          {status} {lineDraft?.length ? `| line pts: ${lineDraft.length}` : ""}
+          {lineDraft?.length ? `line pts: ${lineDraft.length}` : ""} {laneDraft?.length ? `lane pts: ${laneDraft.length}` : ""}
+        </div>
+      </div>
+
+      {/* bottom dock: camera preview + BEV layer side by side */}
+      <div style={{ gridArea: "dock", display: "flex", gap: 8, padding: "6px 8px",
+                    borderTop: "1px solid #2a2f36", background: "#171b1f",
+                    overflow: "hidden" }}>
+        <div style={{ flex: "0 0 auto", width: 396 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+            <b style={{ fontSize: 12 }}>相机预览</b>
+            <select value={previewCam} onChange={(e) => setPreviewCam(parseInt(e.target.value))}>
+              {scene.cameras.map((c, i) => <option key={c.camera_id} value={i}>{c.camera_id}</option>)}
+            </select>
+            <Btn onClick={refreshPreview}>刷新</Btn>
+            <Btn onClick={() => zoomBy(1 / 1.5)} title="zoom out">−</Btn>
+            <span style={{ fontSize: 12, minWidth: 34, textAlign: "center" }}>{zoom.toFixed(1)}×</span>
+            <Btn onClick={() => zoomBy(1.5)} title="zoom in">＋</Btn>
+            <Btn onClick={resetZoom} title="reset zoom/pan">复位</Btn>
+            <Btn onClick={() => setViewerOpen(true)} title="open fullscreen viewer">⤢ 大图</Btn>
+          </div>
+          <div
+            ref={previewWrap}
+            data-testid="preview-box"
+            style={{ position: "relative", width: 392, height: 235 - 46,
+                     overflow: "hidden", border: "1px solid #333",
+                     cursor: zoom > 1 ? "grab" : "default" }}
+            onPointerDown={(e) => {
+              if (zoom <= 1) { lookDrag(e); return; }
+              panRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+              (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              const p = panRef.current;
+              if (p) {
+                setPan({ x: p.px + (e.clientX - p.x), y: p.py + (e.clientY - p.y) });
+                return;
+              }
+              if (lookRef.current) lookMove(e);
+            }}
+            onPointerUp={() => { panRef.current = null; lookEnd(); }}
+            onDoubleClick={resetZoom}
+            title="拖拽: 1x 转向相机 / 放大后平移; 滚轮: 缩放"
+          >
+            <canvas ref={previewCanvas} data-testid="preview-canvas" style={{
+              width: "100%", height: "100%", display: "block",
+              imageRendering: "pixelated",
+              transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+              transformOrigin: "0 0",
+            }} />
+          </div>
+          {viewerOpen && previewUrl && (
+            <FullscreenViewer
+              url={previewUrl}
+              onClose={() => setViewerOpen(false)}
+            />
+          )}
+        </div>
+        {showBevLayer && <div style={{ flex: "0 0 auto" }}>
+          <div style={{ fontSize: 11, color: "#9ab", marginBottom: 4 }}>BEV 实例层 (上=远, 左=左)</div>
+          <canvas ref={bevCanvas} style={{ width: 196, height: 392, transform: "rotate(-90deg) translateY(-100%)",
+            transformOrigin: "top right", border: "1px solid #333", imageRendering: "pixelated" }} />
+        </div>}
+        <div style={{ marginLeft: "auto", alignSelf: "end", fontSize: 11, color: "#667" }}>
+          stats: arrows {scene.arrows.length} · objects {scene.objects.length} · lines {scene.lane_lines.length} · lanes {scene.lanes.length} · cameras {scene.cameras.length}
         </div>
       </div>
 
@@ -929,64 +1116,13 @@ function App() {
           setRightW(Math.min(560, Math.max(220, p.w - (e.clientX - p.x))));
         }}
         onPointerUp={() => { splitRef.current = null; }}
-        style={{ cursor: "col-resize", background: "#22262c" }}
+        style={{ gridArea: "split", cursor: "col-resize", background: "#22262c" }}
         title="drag to resize panel"
       />
       {/* right panel */}
-      <div style={{ borderLeft: "1px solid #2a2f36", padding: 8, overflowY: "auto" }}>
-        <h4 style={{ margin: "2px 0 6px" }}>properties</h4>
+      <div data-testid="props-panel" style={{ gridArea: "panel", borderLeft: "1px solid #2a2f36", padding: 8, overflowY: "auto" }}>
+        <h4 style={{ margin: "2px 0 6px" }}>属性</h4>
         {selPanel}
-        <h4 style={{ margin: "12px 0 6px" }}>training camera preview</h4>
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <select value={previewCam} onChange={(e) => setPreviewCam(parseInt(e.target.value))}>
-            {scene.cameras.map((c, i) => <option key={c.camera_id} value={i}>{c.camera_id}</option>)}
-          </select>
-          <Btn onClick={refreshPreview}>refresh</Btn>
-          <Btn onClick={() => zoomBy(1 / 1.5)} title="zoom out">-</Btn>
-          <span style={{ fontSize: 12, minWidth: 34, textAlign: "center" }}>{zoom.toFixed(1)}×</span>
-          <Btn onClick={() => zoomBy(1.5)} title="zoom in">+</Btn>
-          <Btn onClick={resetZoom} title="reset zoom/pan">reset</Btn>
-          <Btn onClick={() => setViewerOpen(true)} title="open fullscreen viewer">⤢ 大图</Btn>
-        </div>
-        <div
-          ref={previewWrap}
-          style={{ position: "relative", width: "100%", aspectRatio: "320 / 192",
-                   overflow: "hidden", border: "1px solid #333", marginTop: 6,
-                   cursor: zoom > 1 ? "grab" : "default" }}
-          onPointerDown={(e) => {
-            if (zoom <= 1) { lookDrag(e); return; }
-            panRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
-            (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-          }}
-          onPointerMove={(e) => {
-            const p = panRef.current;
-            if (p) {
-              setPan({ x: p.px + (e.clientX - p.x), y: p.py + (e.clientY - p.y) });
-              return;
-            }
-            if (lookRef.current) lookMove(e);
-          }}
-          onPointerUp={() => { panRef.current = null; lookEnd(); }}
-          onDoubleClick={resetZoom}
-          title="drag: aim camera (1x) / pan (zoomed); wheel: zoom"
-        >
-          <canvas ref={previewCanvas} style={{
-            width: "100%", height: "100%", display: "block",
-            imageRendering: "pixelated",
-            transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
-            transformOrigin: "0 0",
-          }} />
-        </div>
-        {viewerOpen && previewUrl && (
-          <FullscreenViewer
-            url={previewUrl}
-            onClose={() => setViewerOpen(false)}
-          />
-        )}
-        {showBevLayer && <>
-          <div style={{ fontSize: 11, color: "#9ab", marginTop: 6 }}>BEV instance layer (row0=far, col0=left)</div>
-          <canvas ref={bevCanvas} style={{ width: "100%", border: "1px solid #333", imageRendering: "pixelated" }} />
-        </>}
         <h4 style={{ margin: "12px 0 6px" }}>batch generation</h4>
         <label style={{ display: "flex", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
           <span>dataset</span>

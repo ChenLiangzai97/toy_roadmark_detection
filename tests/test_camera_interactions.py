@@ -67,7 +67,7 @@ def test_scale_drag_absolute_and_deterministic():
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(f"{base}/index.html")
             page.wait_for_selector("text=arrow-toy", timeout=15000)
-            canvas = page.locator("canvas").first
+            canvas = page.locator("[data-testid=view3d]")
             cb = canvas.bounding_box()
             cw, ch = cb["width"], cb["height"]
             # place a box at a known spot and select it
@@ -157,7 +157,7 @@ def test_camera_gizmo_and_preview_zoom():
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(f"{base}/index.html")
             page.wait_for_selector("text=arrow-toy", timeout=15000)
-            canvas = page.locator("canvas").first
+            canvas = page.locator("[data-testid=view3d]")
             cb = canvas.bounding_box()
             cw, ch = cb["width"], cb["height"]
 
@@ -208,7 +208,7 @@ def test_camera_gizmo_and_preview_zoom():
             # --- aim the camera by dragging the PREVIEW at 1x ---
             cal_before = json.loads(json.dumps(
                 s_redo["cameras"][0]))
-            pv = page.locator("div[style*='aspect-ratio']").first
+            pv = page.locator("[data-testid=preview-box]")
             box = pv.bounding_box()
             mx, my = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
@@ -294,7 +294,7 @@ def test_camera_gizmo_and_preview_zoom():
 
             # --- save / reload keeps the edited calibration exactly ---
             with page.expect_download() as dl:
-                page.click("button:has-text('save')")
+                page.click("button:has-text('保存')")
             saved = pathlib.Path(dl.value.path())
             saved_scene = json.loads(saved.read_text())
             assert saved_scene["cameras"][0]["T_C_E"] == \
@@ -319,9 +319,8 @@ def test_camera_gizmo_and_preview_zoom():
                 saved_scene["cameras"][0]["T_C_E"]
 
             # --- preview zoom ---
-            preview = page.locator(
-                "div[style*='aspect-ratio']").first
-            canv2 = page.locator("canvas").nth(1)
+            preview = page.locator("[data-testid=preview-box]")
+            canv2 = page.locator("[data-testid=preview-canvas]")
             t0 = canv2.evaluate("el => el.style.transform")
             assert "scale(1)" in t0 or t0 == ""
             page.click("button[title='zoom in']")
